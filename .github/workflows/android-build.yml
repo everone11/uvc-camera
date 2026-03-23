@@ -1,0 +1,66 @@
+name: Build LSPosed Module APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew || true
+
+      - name: Ensure app/libs exists
+        run: mkdir -p app/libs
+
+      - name: Try download xposed-api.jar (optional)
+        run: |
+          if [ ! -f app/libs/xposed-api.jar ]; then
+            echo "Attempting to download xposed-api.jar from a common template source..."
+            curl -fsSL -o app/libs/xposed-api.jar https://raw.githubusercontent.com/rovo89/XposedBridge/master/xposed-api.jar || true
+            if [ ! -f app/libs/xposed-api.jar ]; then
+              echo "xposed-api.jar not found. Please add app/libs/xposed-api.jar to build locally or update the workflow."
+            fi
+          fi
+
+      - name: Build Release APK
+        run: ./gradlew assembleRelease --stacktrace
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: uvcforce-apk
+          path: app/build/outputs/apk/release/*.apk
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: uvcforce-apk
+          path: ./artifact
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ./artifact/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

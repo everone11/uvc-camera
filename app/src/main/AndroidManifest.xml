@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.uvcforce">
+
+    <application
+        android:label="UVC Force"
+        android:description="@string/xposedmodule_description"
+        android:allowBackup="false">
+    </application>
+
+</manifest>
