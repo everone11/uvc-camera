@@ -135,6 +135,43 @@ public class Module implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             XposedBridge.log("uvcforce: failed to hook old Camera API: " + t.getMessage());
         }
+
+        // Hook ByteRTC Camera1Enumerator to clear static cache and force re-enumeration
+        try {
+            final Class<?> enumClass = XposedHelpers.findClass(
+                "com.ss.bytertc.base.media.camera.Camera1Enumerator",
+                lpparam.classLoader
+            );
+
+            XposedHelpers.findAndHookMethod(
+                enumClass,
+                "getSupportedFormats",
+                int.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        Integer camIndex = (Integer) param.args[0];
+                        if (camIndex == null) return;
+                        XposedBridge.log("uvcforce: Camera1Enumerator.getSupportedFormats called for index: " + camIndex);
+                        try {
+                            XposedHelpers.setStaticObjectField(enumClass, "cachedSupportedFormats", null);
+                            XposedBridge.log("uvcforce: cleared cachedSupportedFormats");
+                        } catch (Throwable t) {
+                            XposedBridge.log("uvcforce: failed to clear cachedSupportedFormats: " + t);
+                        }
+                    }
+
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                        @SuppressWarnings("unchecked")
+                        java.util.List<?> res = (java.util.List<?>) param.getResult();
+                        XposedBridge.log("uvcforce: Camera1Enumerator.getSupportedFormats returned size: " + (res == null ? "null" : res.size()));
+                    }
+                }
+            );
+        } catch (Throwable t) {
+            XposedBridge.log("uvcforce: Camera1Enumerator not found or hook failed: " + t);
+        }
     }
 
     private int findExternalCameraOldAPI() {
