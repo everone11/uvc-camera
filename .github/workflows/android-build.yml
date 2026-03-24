@@ -6,12 +6,15 @@ on:
     branches:
       - main
 
+# 强制所有 JavaScript Actions 使用 Node.js 24 运行，消除 Node 20 弃用警告
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      # 同时设置这两个环境变量为相同路径，彻底解决 Gradle 的冲突检测问题
       - name: Set Android Environment Variables
         run: |
           echo "ANDROID_HOME=${{ runner.temp }}/android-sdk" >> $GITHUB_ENV
