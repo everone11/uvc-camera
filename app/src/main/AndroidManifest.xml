@@ -1,10 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.uvcforce">
+    package="com.everone11.uvccamera.xposed">
+
+    <uses-sdk
+        android:minSdkVersion="16"
+        android:targetSdkVersion="33" />
 
     <application
-        android:label="uvcforce"
-        android:allowBackup="false">
+        android:allowBackup="false"
+        android:label="uvc-camera-xposed">
 
         <meta-data
             android:name="xposedmodule"
@@ -14,6 +18,6 @@
             android:value="53" />
         <meta-data
             android:name="xposeddescription"
-            android:value="Force apps to prefer external UVC cameras" />
+            android:value="Hook Camera1Enumerator.getSupportedFormats" />
     </application>
 </manifest>

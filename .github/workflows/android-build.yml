@@ -23,26 +23,13 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x ./gradlew || true
 
-      - name: Ensure app/libs exists
-        run: mkdir -p app/libs
-
-      - name: Try download xposed-api.jar (optional)
-        run: |
-          if [ ! -f app/libs/xposed-api.jar ]; then
-            echo "Attempting to download xposed-api.jar from a common template source..."
-            curl -fsSL -o app/libs/xposed-api.jar https://raw.githubusercontent.com/rovo89/XposedBridge/master/xposed-api.jar || true
-            if [ ! -f app/libs/xposed-api.jar ]; then
-              echo "xposed-api.jar not found. Please add app/libs/xposed-api.jar to build locally or update the workflow."
-            fi
-          fi
-
       - name: Build Release APK
         run: ./gradlew assembleRelease --stacktrace
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: uvcforce-apk
+          name: uvc-camera-xposed-apk
           path: app/build/outputs/apk/release/*.apk
 
   release:
@@ -55,7 +42,7 @@ jobs:
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
-          name: uvcforce-apk
+          name: uvc-camera-xposed-apk
           path: ./artifact
 
       - name: Create Release
