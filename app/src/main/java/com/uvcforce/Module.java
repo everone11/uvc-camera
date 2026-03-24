@@ -7,6 +7,7 @@ import android.hardware.Camera.CameraInfo;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
+import de.robv.android.xposed.XC_MethodReplacement;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
@@ -171,6 +172,115 @@ public class Module implements IXposedHookLoadPackage {
             );
         } catch (Throwable t) {
             XposedBridge.log("uvcforce: Camera1Enumerator not found or hook failed: " + t);
+        }
+
+        // Hook Camera.Parameters.getSupportedPreviewFpsRange to return dummy data if null/empty
+        try {
+            XposedHelpers.findAndHookMethod(
+                "android.hardware.Camera$Parameters",
+                lpparam.classLoader,
+                "getSupportedPreviewFpsRange",
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                        @SuppressWarnings("unchecked")
+                        List<int[]> result = (List<int[]>) param.getResult();
+                        if (result == null || result.isEmpty()) {
+                            List<int[]> fake = new ArrayList<>();
+                            fake.add(new int[]{15000, 30000});
+                            param.setResult(fake);
+                            XposedBridge.log("uvcforce: faked getSupportedPreviewFpsRange");
+                        }
+                    }
+                }
+            );
+        } catch (Throwable t) {
+            XposedBridge.log("uvcforce: failed to hook getSupportedPreviewFpsRange: " + t.getMessage());
+        }
+
+        // Hook Camera.Parameters.getSupportedPictureSizes to fallback to preview sizes if null/empty
+        try {
+            XposedHelpers.findAndHookMethod(
+                "android.hardware.Camera$Parameters",
+                lpparam.classLoader,
+                "getSupportedPictureSizes",
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                        @SuppressWarnings("unchecked")
+                        List<?> result = (List<?>) param.getResult();
+                        if (result == null || result.isEmpty()) {
+                            Camera.Parameters params = (Camera.Parameters) param.thisObject;
+                            List<Camera.Size> previewSizes = params.getSupportedPreviewSizes();
+                            if (previewSizes != null && !previewSizes.isEmpty()) {
+                                param.setResult(previewSizes);
+                                XposedBridge.log("uvcforce: faked getSupportedPictureSizes with preview sizes");
+                            } else {
+                                XposedBridge.log("uvcforce: getSupportedPictureSizes: no preview sizes available either");
+                            }
+                        }
+                    }
+                }
+            );
+        } catch (Throwable t) {
+            XposedBridge.log("uvcforce: failed to hook getSupportedPictureSizes: " + t.getMessage());
+        }
+
+        // Hook Camera.setParameters to swallow exceptions from UVC cameras
+        try {
+            XposedHelpers.findAndHookMethod(
+                Camera.class,
+                "setParameters",
+                Camera.Parameters.class,
+                new XC_MethodReplacement() {
+                    @Override
+                    protected Object replaceHookedMethod(MethodHookParam param) throws Throwable {
+                        try {
+                            XposedBridge.invokeOriginalMethod(param.method, param.thisObject, param.args);
+                        } catch (Throwable t) {
+                            XposedBridge.log("uvcforce: ignored Camera.setParameters exception: " + t.getMessage());
+                        }
+                        return null;
+                    }
+                }
+            );
+        } catch (Throwable t) {
+            XposedBridge.log("uvcforce: failed to hook Camera.setParameters: " + t.getMessage());
+        }
+
+        // Hook CameraManager.openCamera (all overloads) to force external camera ID
+        try {
+            Class<?> cameraManagerClass = Class.forName("android.hardware.camera2.CameraManager");
+            for (java.lang.reflect.Method method : cameraManagerClass.getDeclaredMethods()) {
+                if ("openCamera".equals(method.getName())) {
+                    XposedBridge.hookMethod(method, new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                            try {
+                                String requestedId = (String) param.args[0];
+                                CameraManager mgr = (CameraManager) param.thisObject;
+                                String externalId = null;
+                                for (String id : mgr.getCameraIdList()) {
+                                    CameraCharacteristics ch = mgr.getCameraCharacteristics(id);
+                                    Integer lens = ch.get(CameraCharacteristics.LENS_FACING);
+                                    if (lens != null && lens == CameraCharacteristics.LENS_FACING_EXTERNAL) {
+                                        externalId = id;
+                                        break;
+                                    }
+                                }
+                                if (externalId != null && !externalId.equals(requestedId)) {
+                                    param.args[0] = externalId;
+                                    XposedBridge.log("uvcforce: remapped openCamera(" + requestedId + ") -> openCamera(" + externalId + ")");
+                                }
+                            } catch (Throwable t) {
+                                XposedBridge.log("uvcforce: openCamera hook error: " + t.getMessage());
+                            }
+                        }
+                    });
+                }
+            }
+        } catch (Throwable t) {
+            XposedBridge.log("uvcforce: failed to hook CameraManager.openCamera: " + t.getMessage());
         }
     }
 
