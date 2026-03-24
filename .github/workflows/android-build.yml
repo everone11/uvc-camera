@@ -6,7 +6,6 @@ on:
     branches:
       - main
 
-# 强制所有 JavaScript Actions 使用 Node.js 24 运行，消除 Node 20 弃用警告
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -68,6 +67,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
             
-      - name: Build (assembleRelease)
+      # 这里我将 build 任务改为了 assembleDebug。
+      # 因为 assembleRelease 默认生成的是“未签名”的 APK，无法直接安装到手机上。
+      # assembleDebug 生成的 APK 自带测试签名，可以直接安装。
+      - name: Build APK (Debug)
         run: |
-          ./gradlew assembleRelease --no-daemon --stacktrace
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      # 新增的步骤：将生成的 APK 上传到 GitHub
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
