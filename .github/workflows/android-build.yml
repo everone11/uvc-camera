@@ -11,7 +11,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 设置环境变量，使用 runner.temp 必须在 steps 中执行
       - name: Set ANDROID_SDK_ROOT
         run: echo "ANDROID_SDK_ROOT=${{ runner.temp }}/android-sdk" >> $GITHUB_ENV
 
@@ -36,14 +35,16 @@ jobs:
           
       - name: Add SDK tools to PATH and accept licenses
         env:
-          PATH: ${{ env.ANDROID_SDK_ROOT }}/cmdline-tools/latest/bin:${{ env.ANDROID_SDK_ROOT }}/platform-tools:${{ env.PATH }}
+          # 使用双引号包裹包含多个 ${{ }} 的变量拼接
+          PATH: "${{ env.ANDROID_SDK_ROOT }}/cmdline-tools/latest/bin:${{ env.ANDROID_SDK_ROOT }}/platform-tools:${{ env.PATH }}"
         run: |
           yes | sdkmanager --licenses || true
           sdkmanager --list
           
       - name: Install Android platforms and build-tools (adjust API as needed)
         env:
-          PATH: ${{ env.ANDROID_SDK_ROOT }}/cmdline-tools/latest/bin:${{ env.ANDROID_SDK_ROOT }}/platform-tools:${{ env.PATH }}
+          # 使用双引号包裹
+          PATH: "${{ env.ANDROID_SDK_ROOT }}/cmdline-tools/latest/bin:${{ env.ANDROID_SDK_ROOT }}/platform-tools:${{ env.PATH }}"
         run: |
           sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.2"
           sdkmanager "platforms;android-29" "build-tools;29.0.3"
@@ -58,7 +59,8 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/gradle/wrapper/gradle-wrapper.properties') }}-${{ hashFiles('**/*.gradle*','**/gradle.properties') }}
+          # 这里用双引号包裹并修复了表达式闭合问题
+          key: "${{ runner.os }}-gradle-${{ hashFiles('**/gradle/wrapper/gradle-wrapper.properties') }}-${{ hashFiles('**/*.gradle*', '**/gradle.properties') }}"
           restore-keys: |
             ${{ runner.os }}-gradle-
             
@@ -66,4 +68,5 @@ jobs:
         run: |
           ./gradlew assembleRelease --no-daemon --stacktrace
         env:
-          JAVA_HOME: ${{ env.JAVA_HOM
+          # 使用双引号包裹
+          JAVA_HOME: "${{ env.JAVA_HOME }}"
