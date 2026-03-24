@@ -1,22 +1,23 @@
-plugins {
-    id 'com.android.application'
-}
+apply plugin: 'com.android.application'
 
 android {
-    compileSdk 33
+    compileSdkVersion 33
+
     defaultConfig {
-        applicationId "com.uvcforce"
-        minSdk 21
-        targetSdk 33
+        applicationId "com.everone11.uvccamera.xposed"
+        minSdkVersion 16
+        targetSdkVersion 33
         versionCode 1
         versionName "1.0"
     }
+
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_11
-        targetCompatibility JavaVersion.VERSION_11
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
     }
 }
 
 dependencies {
-    compileOnly files('libs/xposed-api.jar')
+    // Xposed API 作为 compileOnly（或把 xposed-api.jar 放到 libs 并作为 provided）
+    compileOnly 'de.robv.android.xposed:api:82'
 }
