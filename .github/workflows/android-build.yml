@@ -10,7 +10,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
+      ANDROID_SDK_ROOT: $RUNNER_TEMP/android-sdk
 
     steps:
       - name: Checkout
@@ -33,16 +33,14 @@ jobs:
           rm -f cmdline-tools.zip
 
       - name: Add SDK tools to PATH and accept licenses
-        env:
-          PATH: $ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH
         run: |
+          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
           yes | sdkmanager --licenses || true
           sdkmanager --list
 
       - name: Install Android platforms and build-tools (adjust API as needed)
-        env:
-          PATH: $ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH
         run: |
+          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
           sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.2"
           sdkmanager "platforms;android-29" "build-tools;29.0.3"
 
@@ -63,5 +61,3 @@ jobs:
       - name: Build (assembleRelease)
         run: |
           ./gradlew assembleRelease --no-daemon --stacktrace
-        env:
-          JAVA_HOME: ${{ env.JAVA_HOME }}
