@@ -1,5 +1,6 @@
 package com.uvcforce;
 
+import android.content.pm.ApplicationInfo;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
 import android.hardware.Camera;
@@ -23,6 +24,21 @@ public class Module implements IXposedHookLoadPackage {
 
     @Override
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
+        // Filter out the Android system core process
+        if ("android".equals(lpparam.packageName)) {
+            return;
+        }
+
+        // Filter out system UI and common system provider components
+        if ("com.android.systemui".equals(lpparam.packageName) || lpparam.packageName.startsWith("com.android.providers.")) {
+            return;
+        }
+
+        // Filter out system apps; only hook user-installed third-party apps
+        if (lpparam.appInfo == null || (lpparam.appInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0) {
+            return;
+        }
+
         if (TARGET_PACKAGE != null && TARGET_PACKAGE.length() > 0) {
             if (!TARGET_PACKAGE.equals(lpparam.packageName)) {
                 return;
