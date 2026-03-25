@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">UVC Camera Hook</string>
+    <string name="app_title">UVC Camera Hook 目标选择</string>
+    <string name="current_selection_label">当前 Hook 目标</string>
+    <string name="current_target_all">全部应用（Hook 所有应用）</string>
+    <string name="current_target">%1$s\n%2$s</string>
+    <string name="btn_hook_all">清除选择（Hook 所有应用）</string>
+    <string name="search_hint">搜索应用名或包名…</string>
+    <string name="installed_apps_label">已安装应用（点击选择 Hook 目标）</string>
+    <string name="loading_apps">正在加载应用列表…</string>
+    <string name="selected_badge">已选</string>
+    <string name="selected_app">已选择：%1$s</string>
+    <string name="hook_all_apps">已设置为 Hook 所有应用</string>
+</resources>

@@ -4,10 +4,13 @@
 
     <uses-sdk android:minSdkVersion="16" android:targetSdkVersion="33" />
 
+    <!-- Android 11+ 需要此权限才能枚举所有已安装应用 -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+
     <application
         android:allowBackup="false"
-        android:label="UVC Camera Xposed Module">
-        <!-- 无需 Activity；只是一个 xposed 模块 -->
+        android:label="@string/app_name">
+        <!-- Xposed 模块元数据 -->
         <meta-data
             android:name="xposedmodule"
             android:value="true" />
@@ -16,6 +19,17 @@
             android:value="53" />
         <meta-data
             android:name="xposeddescription"
-            android:value="Hook Camera1Enumerator.getSupportedFormats to observe/modify supported formats" />
+            android:value="Hook Camera APIs to prefer external (UVC) cameras" />
+
+        <!-- 应用选择主界面 -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_title">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
     </application>
 </manifest>

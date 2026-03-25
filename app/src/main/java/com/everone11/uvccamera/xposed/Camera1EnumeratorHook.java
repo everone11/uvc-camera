@@ -1,24 +1,33 @@
 package com.everone11.uvccamera.xposed;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
+import de.robv.android.xposed.XSharedPreferences;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
+
 import java.util.List;
 
 /**
- * Xposed hook: 清空 Camera1Enumerator.cachedSupportedFormats 并记录调用。
- *
- * 注意：将 "目标应用包名" 替换为你要 hook 的应用包名，或者删除包名检查以 hook 所有包（不推荐）。
+ * Xposed Hook：读取用户在 MainActivity 中选择的目标包名，
+ * 仅对该应用 Hook Camera1Enumerator.getSupportedFormats。
+ * 若未选择特定应用，则对所有加载的包生效。
  */
 public class Camera1EnumeratorHook implements IXposedHookLoadPackage {
+
     @Override
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
-        // 将下面替换为目标 app 的包名
-        final String targetPkg = "目标应用包名";
-        if (!lpparam.packageName.equals(targetPkg)) {
-            return;
+        // 从模块 SharedPreferences 读取用户选择的目标包名
+        XSharedPreferences prefs = new XSharedPreferences(
+                "com.everone11.uvccamera.xposed", PrefManager.PREF_NAME);
+        String targetPkg = prefs.getString(PrefManager.KEY_TARGET_PACKAGE, "");
+
+        // 若已选择特定应用，则跳过其他包
+        if (targetPkg != null && !targetPkg.isEmpty()) {
+            if (!lpparam.packageName.equals(targetPkg)) {
+                return;
+            }
         }
 
         XposedBridge.log("Camera1EnumeratorHook loaded in: " + lpparam.packageName);
@@ -38,7 +47,7 @@ public class Camera1EnumeratorHook implements IXposedHookLoadPackage {
                         int camIndex = (Integer) param.args[0];
                         XposedBridge.log("Camera1Enumerator.getSupportedFormats called for index: " + camIndex);
                         try {
-                            // 清空静态缓存，强制重新枚举（与同步保持一致性时需小心）
+                            // 清空静态缓存，强制重新枚举
                             XposedHelpers.setStaticObjectField(enumClass, "cachedSupportedFormats", null);
                             XposedBridge.log("cleared cachedSupportedFormats");
                         } catch (Throwable t) {
@@ -50,9 +59,8 @@ public class Camera1EnumeratorHook implements IXposedHookLoadPackage {
                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                         @SuppressWarnings("unchecked")
                         List<?> res = (List<?>) param.getResult();
-                        XposedBridge.log("Camera1Enumerator.getSupportedFormats returned size: " + (res == null ? "null" : res.size()));
-                        // 可以在这里篡改返回值，例如添加/替换元素：
-                        // if (res != null) { res.clear(); /* 构造自定义列表后 param.setResult(res) */ }
+                        XposedBridge.log("Camera1Enumerator.getSupportedFormats returned size: "
+                                + (res == null ? "null" : res.size()));
                     }
                 }
             );
