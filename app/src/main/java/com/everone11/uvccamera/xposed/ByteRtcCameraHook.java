@@ -59,6 +59,7 @@ public class ByteRtcCameraHook implements IXposedHookLoadPackage {
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
         XSharedPreferences prefs = new XSharedPreferences(
                 MODULE_PACKAGE, PrefManager.PREF_NAME);
+        prefs.reload();
         String targetPkg = prefs.getString(PrefManager.KEY_TARGET_PACKAGE, "");
 
         if (targetPkg != null && !targetPkg.isEmpty()) {
@@ -70,9 +71,9 @@ public class ByteRtcCameraHook implements IXposedHookLoadPackage {
         XposedBridge.log(TAG + ": loaded for " + lpparam.packageName);
 
         hookGetNumberOfCameras();
-        hookCamera1Enumerator(lpparam);
-        hookCamera1Session(lpparam);
-        hookCamera2Session(lpparam);
+        hookCamera1Enumerator(lpparam, prefs);
+        hookCamera1Session(lpparam, prefs);
+        hookCamera2Session(lpparam, prefs);
     }
 
     /**
@@ -107,12 +108,18 @@ public class ByteRtcCameraHook implements IXposedHookLoadPackage {
      * - getDeviceNames(): return at least ["0"] to ensure the UVC camera is discovered.
      * - getSupportedFormats(int): return UVC-compatible fallback formats when the result is empty.
      */
-    private void hookCamera1Enumerator(final XC_LoadPackage.LoadPackageParam lpparam) {
+    private void hookCamera1Enumerator(final XC_LoadPackage.LoadPackageParam lpparam,
+            XSharedPreferences prefs) {
+        String className = prefs.getString(
+                PrefManager.KEY_ENUMERATOR_CLASS, PrefManager.DEFAULT_ENUMERATOR_CLASS);
         Class<?> enumClass;
         try {
-            enumClass = XposedHelpers.findClass(BYTERTC_CAMERA1_ENUMERATOR, lpparam.classLoader);
+            enumClass = XposedHelpers.findClass(className, lpparam.classLoader);
+        } catch (XposedHelpers.ClassNotFoundError e) {
+            // Expected when this app does not include the ByteRTC SDK; fail silently.
+            return;
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": Camera1Enumerator class not found: " + t.getMessage());
+            XposedBridge.log(TAG + ": failed to find Camera1Enumerator class: " + t.getMessage());
             return;
         }
 
@@ -238,12 +245,18 @@ public class ByteRtcCameraHook implements IXposedHookLoadPackage {
      * Logs all invocations so issues on Android 14 TV can be diagnosed via logcat.
      * This allows lower-level UVC hooks to substitute the real camera device.
      */
-    private void hookCamera1Session(final XC_LoadPackage.LoadPackageParam lpparam) {
+    private void hookCamera1Session(final XC_LoadPackage.LoadPackageParam lpparam,
+            XSharedPreferences prefs) {
+        String className = prefs.getString(
+                PrefManager.KEY_SESSION1_CLASS, PrefManager.DEFAULT_SESSION1_CLASS);
         Class<?> sessionClass;
         try {
-            sessionClass = XposedHelpers.findClass(BYTERTC_CAMERA1_SESSION, lpparam.classLoader);
+            sessionClass = XposedHelpers.findClass(className, lpparam.classLoader);
+        } catch (XposedHelpers.ClassNotFoundError e) {
+            // Expected when this app does not include the ByteRTC SDK; fail silently.
+            return;
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": Camera1Session class not found: " + t.getMessage());
+            XposedBridge.log(TAG + ": failed to find Camera1Session class: " + t.getMessage());
             return;
         }
 
@@ -283,12 +296,18 @@ public class ByteRtcCameraHook implements IXposedHookLoadPackage {
      * Hook Camera2Session to intercept create().
      * Logs session creation so failures on Android 14 TV can be diagnosed.
      */
-    private void hookCamera2Session(final XC_LoadPackage.LoadPackageParam lpparam) {
+    private void hookCamera2Session(final XC_LoadPackage.LoadPackageParam lpparam,
+            XSharedPreferences prefs) {
+        String className = prefs.getString(
+                PrefManager.KEY_SESSION2_CLASS, PrefManager.DEFAULT_SESSION2_CLASS);
         Class<?> sessionClass;
         try {
-            sessionClass = XposedHelpers.findClass(BYTERTC_CAMERA2_SESSION, lpparam.classLoader);
+            sessionClass = XposedHelpers.findClass(className, lpparam.classLoader);
+        } catch (XposedHelpers.ClassNotFoundError e) {
+            // Expected when this app does not include the ByteRTC SDK; fail silently.
+            return;
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": Camera2Session class not found: " + t.getMessage());
+            XposedBridge.log(TAG + ": failed to find Camera2Session class: " + t.getMessage());
             return;
         }
 

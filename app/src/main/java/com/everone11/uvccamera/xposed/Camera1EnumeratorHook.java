@@ -21,6 +21,7 @@ public class Camera1EnumeratorHook implements IXposedHookLoadPackage {
         // 从模块 SharedPreferences 读取用户选择的目标包名
         XSharedPreferences prefs = new XSharedPreferences(
                 "com.everone11.uvccamera.xposed", PrefManager.PREF_NAME);
+        prefs.reload();
         String targetPkg = prefs.getString(PrefManager.KEY_TARGET_PACKAGE, "");
 
         // 若已选择特定应用，则跳过其他包
@@ -30,10 +31,14 @@ public class Camera1EnumeratorHook implements IXposedHookLoadPackage {
             }
         }
 
+        // Allow overriding the class name in case the target app obfuscates ByteRTC classes.
+        String enumeratorClass = prefs.getString(
+                PrefManager.KEY_ENUMERATOR_CLASS, PrefManager.DEFAULT_ENUMERATOR_CLASS);
+
         XposedBridge.log("Camera1EnumeratorHook loaded in: " + lpparam.packageName);
         try {
             final Class<?> enumClass = XposedHelpers.findClass(
-                "com.ss.bytertc.base.media.camera.Camera1Enumerator",
+                enumeratorClass,
                 lpparam.classLoader
             );
 
@@ -64,6 +69,8 @@ public class Camera1EnumeratorHook implements IXposedHookLoadPackage {
                     }
                 }
             );
+        } catch (XposedHelpers.ClassNotFoundError e) {
+            // Expected when this app does not include the ByteRTC SDK; fail silently.
         } catch (Throwable t) {
             XposedBridge.log("Camera1EnumeratorHook error: " + t);
         }
