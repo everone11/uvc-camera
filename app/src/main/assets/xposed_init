@@ -1,1 +1,2 @@
 com.everone11.uvccamera.xposed.Camera1EnumeratorHook
+com.everone11.uvccamera.xposed.ByteRtcCameraHook
