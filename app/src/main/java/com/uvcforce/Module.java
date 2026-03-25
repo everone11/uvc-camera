@@ -2,6 +2,7 @@ package com.uvcforce;
 
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
+import android.hardware.camera2.CameraMetadata;
 import android.hardware.Camera;
 import android.hardware.Camera.CameraInfo;
 
@@ -281,6 +282,53 @@ public class Module implements IXposedHookLoadPackage {
             }
         } catch (Throwable t) {
             XposedBridge.log("uvcforce: failed to hook CameraManager.openCamera: " + t.getMessage());
+        }
+
+        // Hook Camera1 getCameraInfo to spoof external camera as front-facing
+        try {
+            XposedHelpers.findAndHookMethod(
+                Camera.class,
+                "getCameraInfo",
+                int.class,
+                Camera.CameraInfo.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                        Camera.CameraInfo info = (Camera.CameraInfo) param.args[1];
+                        if (info.facing == 2 /* CAMERA_FACING_EXTERNAL */) {
+                            info.facing = Camera.CameraInfo.CAMERA_FACING_FRONT;
+                            XposedBridge.log("uvcforce: getCameraInfo spoofed external camera as FRONT");
+                        }
+                    }
+                }
+            );
+        } catch (Throwable t) {
+            XposedBridge.log("uvcforce: failed to hook Camera.getCameraInfo: " + t.getMessage());
+        }
+
+        // Hook Camera2 CameraCharacteristics.get to spoof external LENS_FACING as front
+        try {
+            XposedHelpers.findAndHookMethod(
+                "android.hardware.camera2.CameraCharacteristics",
+                lpparam.classLoader,
+                "get",
+                CameraCharacteristics.Key.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                        CameraCharacteristics.Key<?> key = (CameraCharacteristics.Key<?>) param.args[0];
+                        if (CameraCharacteristics.LENS_FACING.equals(key)) {
+                            Object result = param.getResult();
+                            if (result instanceof Integer && (Integer) result == CameraMetadata.LENS_FACING_EXTERNAL) {
+                                param.setResult(CameraMetadata.LENS_FACING_FRONT);
+                                XposedBridge.log("uvcforce: CameraCharacteristics.get(LENS_FACING) spoofed external as FRONT");
+                            }
+                        }
+                    }
+                }
+            );
+        } catch (Throwable t) {
+            XposedBridge.log("uvcforce: failed to hook CameraCharacteristics.get: " + t.getMessage());
         }
     }
 
