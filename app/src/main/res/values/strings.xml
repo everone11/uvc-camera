@@ -12,4 +12,5 @@
     <string name="selected_badge">已选</string>
     <string name="selected_app">已选择：%1$s</string>
     <string name="hook_all_apps">已设置为 Hook 所有应用</string>
+    <string name="virtual_camera_desc">虚拟摄像头已启用：应用读取虚拟摄像头（vc0），模块自动转发到 USB/UVC 摄像头</string>
 </resources>
