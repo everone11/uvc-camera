@@ -12,8 +12,11 @@ import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 虚拟摄像头 Hook
@@ -38,21 +41,30 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
     private static final String TAG = "VirtualCameraHook";
 
     /** 虚拟摄像头在 Camera2 API 中对外暴露的 ID */
-    static final String VIRTUAL_CAMERA_ID = "vc0";
+    private static final String VIRTUAL_CAMERA_ID = "vc0";
+
+    /** Camera1 API 中外部/USB 摄像头的 facing 值（Android 未在公开常量中定义） */
+    private static final int CAMERA_FACING_EXTERNAL = 2;
 
     private static final String MODULE_PACKAGE = "com.everone11.uvccamera.xposed";
 
     /**
      * 缓存真实 USB 摄像头的 Camera2 ID。
-     * 首次通过 getCameraIdList 发现后写入；后续直接读取，避免重复枚举。
+     * 首次通过 getCameraIdList 发现后写入；null 表示尚未发现。
      */
-    private static volatile String cachedUvcId = null;
+    private static final AtomicReference<String> cachedUvcId = new AtomicReference<>(null);
 
     /**
      * 缓存真实 USB 摄像头的 Camera1 索引（-1 表示未发现）。
      * 在安装 Hook 之前通过原始 API 发现并缓存，避免 Hook 链递归。
      */
-    private static volatile int cachedUvcIndex = -1;
+    private static final AtomicInteger cachedUvcIndex = new AtomicInteger(-1);
+
+    /**
+     * 缓存 Camera.open(int) 的反射 Method 对象，用于在 Camera.open() 无参 Hook 中
+     * 通过 XposedBridge.invokeOriginalMethod 绕过 Hook 链直接调用原始实现。
+     */
+    private static volatile Method cachedOpenIntMethod = null;
 
     @Override
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
@@ -88,8 +100,8 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
             for (int i = 0; i < n; i++) {
                 Camera.CameraInfo info = new Camera.CameraInfo();
                 Camera.getCameraInfo(i, info);
-                if (info.facing == 2 /* CAMERA_FACING_EXTERNAL */) {
-                    cachedUvcIndex = i;
+                if (info.facing == CAMERA_FACING_EXTERNAL) {
+                    cachedUvcIndex.set(i);
                     XposedBridge.log(TAG + ": Camera1 USB camera discovered at index " + i);
                     return;
                 }
@@ -130,43 +142,56 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
                             if (ids == null) ids = new String[0];
 
                             // 若已包含虚拟摄像头则直接返回，避免重复注入
+                            boolean alreadyInjected = false;
                             for (String id : ids) {
-                                if (VIRTUAL_CAMERA_ID.equals(id)) return;
+                                if (VIRTUAL_CAMERA_ID.equals(id)) {
+                                    alreadyInjected = true;
+                                    break;
+                                }
                             }
+                            if (alreadyInjected) return;
 
-                            // 懒加载：首次枚举时发现并缓存 USB 摄像头 ID
-                            if (cachedUvcId == null) {
-                                CameraManager mgr = (CameraManager) param.thisObject;
-                                for (String id : ids) {
-                                    try {
-                                        CameraCharacteristics ch = mgr.getCameraCharacteristics(id);
-                                        Integer lens = ch.get(CameraCharacteristics.LENS_FACING);
-                                        if (lens != null
-                                                && lens == CameraCharacteristics.LENS_FACING_EXTERNAL) {
-                                            cachedUvcId = id;
-                                            XposedBridge.log(TAG + ": Camera2 USB camera discovered: "
-                                                    + id);
-                                            break;
+                            // 懒加载：首次枚举时发现并缓存 USB 摄像头 ID（加锁防止多线程重复发现）
+                            if (cachedUvcId.get() == null) {
+                                synchronized (cachedUvcId) {
+                                    if (cachedUvcId.get() == null) {
+                                        CameraManager mgr = (CameraManager) param.thisObject;
+                                        for (String id : ids) {
+                                            try {
+                                                CameraCharacteristics ch =
+                                                        mgr.getCameraCharacteristics(id);
+                                                Integer lens =
+                                                        ch.get(CameraCharacteristics.LENS_FACING);
+                                                if (lens != null
+                                                        && lens == CameraCharacteristics.LENS_FACING_EXTERNAL) {
+                                                    cachedUvcId.set(id);
+                                                    XposedBridge.log(TAG
+                                                            + ": Camera2 USB camera discovered: "
+                                                            + id);
+                                                    break;
+                                                }
+                                            } catch (Throwable t) {
+                                                // 单个摄像头查询失败，跳过
+                                            }
                                         }
-                                    } catch (Throwable t) {
-                                        // 单个摄像头查询失败，跳过
                                     }
                                 }
                             }
 
-                            if (cachedUvcId == null) return; // 无 USB 摄像头，不做处理
+                            String uvcId = cachedUvcId.get();
+                            if (uvcId == null) return; // 无 USB 摄像头，不做处理
 
                             // 构建新列表：虚拟摄像头在首位，隐藏真实 USB 摄像头 ID
                             List<String> newList = new ArrayList<>();
                             newList.add(VIRTUAL_CAMERA_ID);
                             for (String id : ids) {
-                                if (!id.equals(cachedUvcId)) {
+                                if (!id.equals(uvcId)) {
                                     newList.add(id);
                                 }
                             }
                             param.setResult(newList.toArray(new String[0]));
                             XposedBridge.log(TAG + ": getCameraIdList injected virtual camera "
-                                    + VIRTUAL_CAMERA_ID + " (backed by " + cachedUvcId
+                                    + VIRTUAL_CAMERA_ID + " (backed by " + uvcId
                                     + "). list=" + newList);
                         } catch (Throwable t) {
                             XposedBridge.log(TAG + ": getCameraIdList hook error: "
@@ -197,11 +222,12 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                         String id = (String) param.args[0];
-                        if (VIRTUAL_CAMERA_ID.equals(id) && cachedUvcId != null) {
-                            param.args[0] = cachedUvcId;
+                        String uvcId = cachedUvcId.get();
+                        if (VIRTUAL_CAMERA_ID.equals(id) && uvcId != null) {
+                            param.args[0] = uvcId;
                             XposedBridge.log(TAG + ": getCameraCharacteristics("
                                     + VIRTUAL_CAMERA_ID + ") -> redirected to USB camera "
-                                    + cachedUvcId);
+                                    + uvcId);
                         }
                     }
                 }
@@ -264,10 +290,11 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                             String requestedId = (String) param.args[0];
-                            if (VIRTUAL_CAMERA_ID.equals(requestedId) && cachedUvcId != null) {
-                                param.args[0] = cachedUvcId;
+                            String uvcId = cachedUvcId.get();
+                            if (VIRTUAL_CAMERA_ID.equals(requestedId) && uvcId != null) {
+                                param.args[0] = uvcId;
                                 XposedBridge.log(TAG + ": openCamera(" + VIRTUAL_CAMERA_ID
-                                        + ") -> forwarded to USB camera " + cachedUvcId);
+                                        + ") -> forwarded to USB camera " + uvcId);
                             }
                         }
                     });
@@ -305,7 +332,7 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                         Camera.CameraInfo info = (Camera.CameraInfo) param.args[1];
-                        if (info.facing == 2 /* CAMERA_FACING_EXTERNAL */) {
+                        if (info.facing == CAMERA_FACING_EXTERNAL) {
                             info.facing = Camera.CameraInfo.CAMERA_FACING_FRONT;
                             XposedBridge.log(TAG + ": Camera.getCameraInfo: USB camera"
                                     + " spoofed as CAMERA_FACING_FRONT (virtual camera)");
@@ -323,6 +350,8 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
      * Hook Camera.open(int cameraId)：
      * 当应用打开任意摄像头且 USB 摄像头存在时，将请求透明地转发到 USB 摄像头，
      * 实现虚拟摄像头层到真实 USB 摄像头的转发。
+     * 注意：与 Camera2 的 "vc0" 类似，Camera1 中所有摄像头请求均优先转发到 USB 摄像头，
+     * 与现有 Module.java 的行为保持一致（始终优选 USB 摄像头）。
      */
     private void hookCameraOpenInt() {
         try {
@@ -335,11 +364,12 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
                     protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                         try {
                             int requested = (Integer) param.args[0];
-                            if (cachedUvcIndex >= 0 && cachedUvcIndex != requested) {
-                                param.args[0] = cachedUvcIndex;
+                            int uvcIdx = cachedUvcIndex.get();
+                            if (uvcIdx >= 0 && uvcIdx != requested) {
+                                param.args[0] = uvcIdx;
                                 XposedBridge.log(TAG + ": Camera.open(" + requested
                                         + ") -> virtual camera forwarded to USB camera index "
-                                        + cachedUvcIndex);
+                                        + uvcIdx);
                             }
                         } catch (Throwable t) {
                             XposedBridge.log(TAG + ": Camera.open(int) hook error: "
@@ -356,7 +386,8 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
 
     /**
      * Hook Camera.open()（无参）：
-     * 默认打开第一个摄像头；若 USB 摄像头存在，则转发到 USB 摄像头索引。
+     * 默认打开第一个摄像头；若 USB 摄像头存在，则通过调用原始 Camera.open(int)
+     * 绕过 Hook 链，直接打开 USB 摄像头索引。
      */
     private void hookCameraOpenNoArg() {
         try {
@@ -367,13 +398,19 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                         try {
-                            if (cachedUvcIndex >= 0) {
-                                // 直接打开 USB 摄像头并设置为结果，跳过默认的 open()
-                                Camera cam = Camera.open(cachedUvcIndex);
+                            int uvcIdx = cachedUvcIndex.get();
+                            if (uvcIdx >= 0) {
+                                // 使用原始（未 Hook）Camera.open(int) 方法，避免触发 hookCameraOpenInt
+                                if (cachedOpenIntMethod == null) {
+                                    cachedOpenIntMethod =
+                                            Camera.class.getDeclaredMethod("open", int.class);
+                                }
+                                Camera cam = (Camera) XposedBridge.invokeOriginalMethod(
+                                        cachedOpenIntMethod, null, new Object[]{uvcIdx});
                                 param.setResult(cam);
                                 XposedBridge.log(TAG + ": Camera.open()"
                                         + " -> virtual camera forwarded to USB camera index "
-                                        + cachedUvcIndex);
+                                        + uvcIdx);
                             }
                         } catch (Throwable t) {
                             XposedBridge.log(TAG + ": Camera.open() hook error: "
