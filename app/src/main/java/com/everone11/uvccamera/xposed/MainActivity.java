@@ -14,9 +14,11 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.BaseAdapter;
 import android.widget.Button;
+import android.widget.CompoundButton;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.ListView;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -37,6 +39,7 @@ public class MainActivity extends Activity {
     private EditText etSearch;
     private ListView listView;
     private View loadingOverlay;
+    private Switch switchMirror;
 
     private AppAdapter adapter;
     private final List<AppInfo> allApps = new ArrayList<>();
@@ -55,6 +58,7 @@ public class MainActivity extends Activity {
         etSearch = findViewById(R.id.et_search);
         listView = findViewById(R.id.list_view);
         loadingOverlay = findViewById(R.id.loading_overlay);
+        switchMirror = findViewById(R.id.switch_mirror);
 
         adapter = new AppAdapter();
         listView.setAdapter(adapter);
@@ -66,6 +70,17 @@ public class MainActivity extends Activity {
                 updateCurrentTargetView();
                 adapter.notifyDataSetChanged();
                 Toast.makeText(MainActivity.this, R.string.hook_all_apps, Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        switchMirror.setChecked(PrefManager.isMirrorEnabled(this));
+        switchMirror.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                PrefManager.setMirrorEnabled(MainActivity.this, isChecked);
+                Toast.makeText(MainActivity.this,
+                        isChecked ? R.string.mirror_enabled_toast : R.string.mirror_disabled_toast,
+                        Toast.LENGTH_SHORT).show();
             }
         });
 
