@@ -65,6 +65,28 @@
                 android:textColor="#1976D2"
                 android:paddingLeft="12dp"
                 android:paddingRight="12dp" />
+
+            <!-- 水平镜像开关 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="8dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="@string/mirror_label"
+                    android:textColor="#212121"
+                    android:textSize="14sp" />
+
+                <Switch
+                    android:id="@+id/switch_mirror"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+            </LinearLayout>
         </LinearLayout>
 
         <!-- 搜索框 -->
