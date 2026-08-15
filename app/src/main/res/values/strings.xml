@@ -13,4 +13,9 @@
     <string name="selected_app">已选择：%1$s</string>
     <string name="hook_all_apps">已设置为 Hook 所有应用</string>
     <string name="virtual_camera_desc">虚拟摄像头已启用：应用读取虚拟摄像头（vc0），模块自动转发到 USB/UVC 摄像头</string>
+
+    <!-- Mirror switch strings -->
+    <string name="mirror_label">水平镜像（左右翻转）</string>
+    <string name="mirror_enabled_toast">已启用水平镜像</string>
+    <string name="mirror_disabled_toast">已禁用水平镜像</string>
 </resources>
