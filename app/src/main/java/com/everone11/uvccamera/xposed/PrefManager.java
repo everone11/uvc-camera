@@ -18,6 +18,9 @@ public class PrefManager {
     // Key for horizontal mirror toggle.
     public static final String KEY_MIRROR_HORIZONTAL = "mirror_horizontal";
 
+    // Key for clockwise 90-degree rotation toggle.
+    public static final String KEY_ROTATE_CW90 = "rotate_cw90";
+
     // Default ByteRTC class names (unobfuscated SDK).
     public static final String DEFAULT_ENUMERATOR_CLASS =
             "com.ss.bytertc.base.media.camera.Camera1Enumerator";
@@ -48,5 +51,17 @@ public class PrefManager {
     public static boolean isMirrorHorizontal(Context context) {
         SharedPreferences prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
         return prefs.getBoolean(KEY_MIRROR_HORIZONTAL, false);
+    }
+
+    /** 保存顺时针旋转90度开关状态。 */
+    public static void setRotateCW90(Context context, boolean enabled) {
+        SharedPreferences prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        prefs.edit().putBoolean(KEY_ROTATE_CW90, enabled).apply();
+    }
+
+    /** 读取顺时针旋转90度开关状态，默认关闭。 */
+    public static boolean isRotateCW90(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        return prefs.getBoolean(KEY_ROTATE_CW90, false);
     }
 }

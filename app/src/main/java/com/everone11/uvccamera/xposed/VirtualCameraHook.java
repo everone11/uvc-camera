@@ -76,6 +76,9 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
     /** 水平镜像开关：由 handleLoadPackage 从偏好设置读取。 */
     private static volatile boolean mirrorEnabled = false;
 
+    /** 顺时针旋转90度开关：由 handleLoadPackage 从偏好设置读取。 */
+    private static volatile boolean rotateCW90Enabled = false;
+
     @Override
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
         XSharedPreferences prefs = new XSharedPreferences(MODULE_PACKAGE, PrefManager.PREF_NAME);
@@ -92,6 +95,9 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
 
         mirrorEnabled = prefs.getBoolean(PrefManager.KEY_MIRROR_HORIZONTAL, false);
         XposedBridge.log(TAG + ": mirrorEnabled=" + mirrorEnabled);
+
+        rotateCW90Enabled = prefs.getBoolean(PrefManager.KEY_ROTATE_CW90, false);
+        XposedBridge.log(TAG + ": rotateCW90Enabled=" + rotateCW90Enabled);
 
         // 在安装 Hook 之前发现 Camera1 USB 摄像头索引，避免 Hook 自调用
         discoverCamera1UvcIndex();
@@ -360,6 +366,9 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
         if (mirrorEnabled) {
             hookCamera1Mirror();
         }
+        if (rotateCW90Enabled) {
+            hookCamera1RotateCW90();
+        }
     }
 
     /**
@@ -576,6 +585,117 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
         public void onPreviewFrame(byte[] data, Camera camera) {
             if (data != null && data.length >= (width * height * 3) / 2) {
                 flipHorizontalNV21InPlace(data, width, height);
+            }
+            delegate.onPreviewFrame(data, camera);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // 顺时针旋转90度 hooks（Camera1）
+    // -------------------------------------------------------------------------
+
+    /**
+     * 当顺时针旋转90度开关启用时调用：
+     * 通过包装 Camera.PreviewCallback / Camera.setPreviewCallbackWithBuffer 的回调，
+     * 在软件层对 NV21 帧数据进行顺时针旋转90度。
+     */
+    private void hookCamera1RotateCW90() {
+        final XC_MethodHook callbackWrapHook = new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                Camera.PreviewCallback cb = (Camera.PreviewCallback) param.args[0];
+                if (cb == null || cb instanceof RotateCW90PreviewCallback) return;
+                try {
+                    Camera cam = (Camera) param.thisObject;
+                    Camera.Size size = cam.getParameters().getPreviewSize();
+                    param.args[0] = new RotateCW90PreviewCallback(cb, size.width, size.height);
+                    XposedBridge.log(TAG + ": preview callback wrapped for rotateCW90 ("
+                            + size.width + "x" + size.height + ")");
+                } catch (Throwable inner) {
+                    XposedBridge.log(TAG + ": failed to wrap preview callback for rotateCW90: "
+                            + inner.getMessage());
+                }
+            }
+        };
+
+        try {
+            XposedHelpers.findAndHookMethod(Camera.class, "setPreviewCallback",
+                    Camera.PreviewCallback.class, callbackWrapHook);
+            XposedBridge.log(TAG + ": Camera.setPreviewCallback rotateCW90 hook installed");
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + ": failed to hook Camera.setPreviewCallback for rotateCW90: "
+                    + t.getMessage());
+        }
+
+        try {
+            XposedHelpers.findAndHookMethod(Camera.class, "setPreviewCallbackWithBuffer",
+                    Camera.PreviewCallback.class, callbackWrapHook);
+            XposedBridge.log(TAG + ": Camera.setPreviewCallbackWithBuffer rotateCW90 hook installed");
+        } catch (Throwable t) {
+            XposedBridge.log(TAG
+                    + ": failed to hook Camera.setPreviewCallbackWithBuffer for rotateCW90: "
+                    + t.getMessage());
+        }
+    }
+
+    /**
+     * 对 NV21 格式帧数据执行顺时针旋转90度。
+     * 输入帧尺寸为 width×height，输出帧尺寸为 height×width。
+     * 返回旋转后的新字节数组（输出宽=原高，输出高=原宽）。
+     */
+    private static byte[] rotateNV21CW90(byte[] data, int width, int height) {
+        int frameSize = width * height;
+        byte[] output = new byte[data.length];
+
+        // 旋转 Y 平面：顺时针90度，输出尺寸 height×width
+        for (int row = 0; row < height; row++) {
+            for (int col = 0; col < width; col++) {
+                // 顺时针90度映射：输出[col][height-1-row] = 输入[row][col]
+                output[col * height + (height - 1 - row)] = data[row * width + col];
+            }
+        }
+
+        // 旋转 UV 平面（NV21 交错 VU 对），输入UV尺寸 width×(height/2)，输出 height×(width/2)
+        int uvOffset = frameSize;
+        int uvWidth  = width;
+        int uvHeight = height / 2;
+        for (int row = 0; row < uvHeight; row++) {
+            for (int col = 0; col < uvWidth; col += 2) {
+                byte vByte = data[uvOffset + row * uvWidth + col];
+                byte uByte = data[uvOffset + row * uvWidth + col + 1];
+                // 对UV坐标做同样的顺时针旋转，保持VU对完整
+                int outCol = col / 2;            // 输出UV列（UV水平降采样）
+                int outRow = uvHeight - 1 - row; // 输出UV行
+                int outUVOffset = frameSize + outCol * uvHeight * 2 + outRow * 2;
+                if (outUVOffset + 1 < output.length) {
+                    output[outUVOffset]     = vByte;
+                    output[outUVOffset + 1] = uByte;
+                }
+            }
+        }
+
+        return output;
+    }
+
+    /**
+     * Camera1 预览回调代理：在调用原始回调前，对 NV21 帧数据进行顺时针旋转90度。
+     * 注意：旋转后宽高互换，回调中传入的 Camera 对象仍为原始对象。
+     */
+    private static final class RotateCW90PreviewCallback implements Camera.PreviewCallback {
+        private final Camera.PreviewCallback delegate;
+        private final int width;
+        private final int height;
+
+        RotateCW90PreviewCallback(Camera.PreviewCallback delegate, int width, int height) {
+            this.delegate = delegate;
+            this.width    = width;
+            this.height   = height;
+        }
+
+        @Override
+        public void onPreviewFrame(byte[] data, Camera camera) {
+            if (data != null && data.length >= (width * height * 3) / 2) {
+                data = rotateNV21CW90(data, width, height);
             }
             delegate.onPreviewFrame(data, camera);
         }

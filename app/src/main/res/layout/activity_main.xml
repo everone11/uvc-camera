@@ -104,6 +104,45 @@
                     android:layout_marginStart="8dp" />
 
             </LinearLayout>
+
+            <!-- 顺时针旋转90度开关 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/rotate_cw90_label"
+                        android:textColor="#212121"
+                        android:textSize="14sp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="@string/rotate_cw90_desc"
+                        android:textColor="#757575"
+                        android:textSize="11sp" />
+
+                </LinearLayout>
+
+                <Switch
+                    android:id="@+id/switch_rotate_cw90"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp" />
+
+            </LinearLayout>
         </LinearLayout>
 
         <!-- 搜索框 -->

@@ -15,4 +15,6 @@
     <string name="virtual_camera_desc">虚拟摄像头已启用：应用读取虚拟摄像头（vc0），模块自动转发到 USB/UVC 摄像头</string>
     <string name="mirror_horizontal_label">水平镜像</string>
     <string name="mirror_horizontal_desc">启用后，传到 Hook 应用的摄像头画面将水平翻转</string>
+    <string name="rotate_cw90_label">顺时针旋转90°</string>
+    <string name="rotate_cw90_desc">启用后，传到 Hook 应用的摄像头画面将顺时针旋转90度</string>
 </resources>
