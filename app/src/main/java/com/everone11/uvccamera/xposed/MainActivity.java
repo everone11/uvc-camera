@@ -36,6 +36,7 @@ public class MainActivity extends Activity {
     private TextView tvCurrentTarget;
     private Button btnClear;
     private Switch switchMirror;
+    private Switch switchRotateCW90;
     private EditText etSearch;
     private ListView listView;
     private View loadingOverlay;
@@ -55,6 +56,7 @@ public class MainActivity extends Activity {
         tvCurrentTarget = findViewById(R.id.tv_current_target);
         btnClear = findViewById(R.id.btn_clear);
         switchMirror = findViewById(R.id.switch_mirror);
+        switchRotateCW90 = findViewById(R.id.switch_rotate_cw90);
         etSearch = findViewById(R.id.et_search);
         listView = findViewById(R.id.list_view);
         loadingOverlay = findViewById(R.id.loading_overlay);
@@ -77,6 +79,14 @@ public class MainActivity extends Activity {
             @Override
             public void onCheckedChanged(android.widget.CompoundButton buttonView, boolean isChecked) {
                 PrefManager.setMirrorHorizontal(MainActivity.this, isChecked);
+            }
+        });
+
+        switchRotateCW90.setChecked(PrefManager.isRotateCW90(this));
+        switchRotateCW90.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(android.widget.CompoundButton buttonView, boolean isChecked) {
+                PrefManager.setRotateCW90(MainActivity.this, isChecked);
             }
         });
 
@@ -109,6 +119,7 @@ public class MainActivity extends Activity {
         super.onResume();
         updateCurrentTargetView();
         switchMirror.setChecked(PrefManager.isMirrorHorizontal(this));
+        switchRotateCW90.setChecked(PrefManager.isRotateCW90(this));
         adapter.notifyDataSetChanged();
     }
 
