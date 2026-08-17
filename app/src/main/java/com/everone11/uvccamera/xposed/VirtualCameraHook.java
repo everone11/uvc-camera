@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * 虚拟摄像头 Hook
  *
- * 在摄像头列表中注入虚拟摄像头（Camera2 ID "vc0"，伪装为前置摄像头）。
+ * 在摄像头列表中注入虚拟摄像头（Camera2 ID "vc0"，伪装为后置摄像头）。
  * 应用打开虚拟摄像头时，模块自动将请求转发到真实的 USB/UVC 摄像头。
  *
  * 数据流：应用 → 虚拟摄像头(vc0 / Camera1 FRONT index) → USB/UVC 摄像头
@@ -27,10 +27,10 @@ import java.util.concurrent.atomic.AtomicReference;
  *   - CameraManager.getCameraIdList()       注入虚拟 ID "vc0"，隐藏真实 USB ID
  *   - CameraManager.getCameraCharacteristics() 将 "vc0" 重定向到真实 USB 摄像头
  *   - CameraManager.openCamera()            将 "vc0" 重定向到真实 USB 摄像头
- *   - CameraCharacteristics.get(Key)        LENS_FACING_EXTERNAL → LENS_FACING_FRONT
+ *   - CameraCharacteristics.get(Key)        LENS_FACING_EXTERNAL → LENS_FACING_BACK
  *
  * Camera1 hooks:
- *   - Camera.getCameraInfo()                USB 外部摄像头伪装为 CAMERA_FACING_FRONT
+ *   - Camera.getCameraInfo()                USB 外部摄像头伪装为 CAMERA_FACING_BACK
  *   - Camera.open(int) / Camera.open()      将前置摄像头请求重定向到 USB 摄像头
  */
 public class VirtualCameraHook {
@@ -201,8 +201,8 @@ public class VirtualCameraHook {
                         && result instanceof Integer
                         && (Integer) result == CameraMetadata.LENS_FACING_EXTERNAL) {
                     xposed.log(Log.DEBUG, TAG, "LENS_FACING_EXTERNAL spoofed"
-                            + " as LENS_FACING_FRONT for virtual camera");
-                    return CameraMetadata.LENS_FACING_FRONT;
+                            + " as LENS_FACING_BACK for virtual camera");
+                    return CameraMetadata.LENS_FACING_BACK;
                 }
                 return result;
             });
@@ -261,9 +261,9 @@ public class VirtualCameraHook {
                 chain.proceed();
                 Camera.CameraInfo info = (Camera.CameraInfo) chain.getArg(1);
                 if (info.facing == CAMERA_FACING_EXTERNAL) {
-                    info.facing = Camera.CameraInfo.CAMERA_FACING_FRONT;
+                    info.facing = Camera.CameraInfo.CAMERA_FACING_BACK;
                     xposed.log(Log.DEBUG, TAG, "Camera.getCameraInfo: USB camera"
-                            + " spoofed as CAMERA_FACING_FRONT (virtual camera)");
+                            + " spoofed as CAMERA_FACING_BACK (virtual camera)");
                 }
                 return null;
             });
