@@ -5,12 +5,10 @@ import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CameraMetadata;
 
-import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XSharedPreferences;
+import android.content.SharedPreferences;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
-import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -36,7 +34,7 @@ import java.util.concurrent.atomic.AtomicReference;
  *   - Camera.getCameraInfo()                USB 外部摄像头伪装为 CAMERA_FACING_FRONT
  *   - Camera.open(int) / Camera.open()      将前置摄像头请求重定向到 USB 摄像头
  */
-public class VirtualCameraHook implements IXposedHookLoadPackage {
+public class VirtualCameraHook {
 
     private static final String TAG = "VirtualCameraHook";
 
@@ -46,7 +44,6 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
     /** Camera1 API 中外部/USB 摄像头的 facing 值（Android 未在公开常量中定义） */
     private static final int CAMERA_FACING_EXTERNAL = 2;
 
-    private static final String MODULE_PACKAGE = "com.everone11.uvccamera.xposed";
 
     /**
      * 缓存真实 USB 摄像头的 Camera2 ID。
@@ -73,25 +70,29 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
      */
     private static volatile Method cachedCcGetMethod = null;
 
-    /** 水平镜像开关：由 handleLoadPackage 从偏好设置读取。 */
+    /** 水平镜像开关：由 apply() 从偏好设置读取。 */
     private static volatile boolean mirrorEnabled = false;
 
-    /** 顺时针旋转90度开关：由 handleLoadPackage 从偏好设置读取。 */
+    /** 顺时针旋转90度开关：由 apply() 从偏好设置读取。 */
     private static volatile boolean rotateCW90Enabled = false;
 
-    @Override
-    public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
-        XSharedPreferences prefs = new XSharedPreferences(MODULE_PACKAGE, PrefManager.PREF_NAME);
-        prefs.reload();
+    /**
+     * 在目标包加载时安装 Hook。
+     *
+     * @param packageName  目标应用包名
+     * @param classLoader  目标应用的 ClassLoader
+     * @param prefs        模块 SharedPreferences（由 MainModule 通过 getSharedPreferences() 提供）
+     */
+    public void apply(String packageName, ClassLoader classLoader, SharedPreferences prefs) {
         String targetPkg = prefs.getString(PrefManager.KEY_TARGET_PACKAGE, "");
 
         if (targetPkg != null && !targetPkg.isEmpty()) {
-            if (!lpparam.packageName.equals(targetPkg)) {
+            if (!packageName.equals(targetPkg)) {
                 return;
             }
         }
 
-        XposedBridge.log(TAG + ": loaded for " + lpparam.packageName);
+        XposedBridge.log(TAG + ": loaded for " + packageName);
 
         mirrorEnabled = prefs.getBoolean(PrefManager.KEY_MIRROR_HORIZONTAL, false);
         XposedBridge.log(TAG + ": mirrorEnabled=" + mirrorEnabled);
@@ -102,7 +103,7 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
         // 在安装 Hook 之前发现 Camera1 USB 摄像头索引，避免 Hook 自调用
         discoverCamera1UvcIndex();
 
-        hookCamera2(lpparam);
+        hookCamera2(classLoader);
         hookCamera1();
     }
 
@@ -135,10 +136,10 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
     // Camera2 API hooks
     // -------------------------------------------------------------------------
 
-    private void hookCamera2(final XC_LoadPackage.LoadPackageParam lpparam) {
-        hookGetCameraIdList(lpparam);
-        hookGetCameraCharacteristics(lpparam);
-        hookCameraCharacteristicsGet(lpparam);
+    private void hookCamera2(ClassLoader classLoader) {
+        hookGetCameraIdList(classLoader);
+        hookGetCameraCharacteristics(classLoader);
+        hookCameraCharacteristicsGet(classLoader);
         hookOpenCamera();
     }
 
@@ -147,11 +148,11 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
      * 若存在 USB 摄像头，则在列表首位注入虚拟摄像头 ID "vc0"，
      * 同时将真实 USB 摄像头 ID 从列表中移除（对应用不可见）。
      */
-    private void hookGetCameraIdList(final XC_LoadPackage.LoadPackageParam lpparam) {
+    private void hookGetCameraIdList(ClassLoader classLoader) {
         try {
             XposedHelpers.findAndHookMethod(
                 "android.hardware.camera2.CameraManager",
-                lpparam.classLoader,
+                classLoader,
                 "getCameraIdList",
                 new XC_MethodHook() {
                     @Override
@@ -260,11 +261,11 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
      * 将虚拟摄像头 ID "vc0" 透明地重定向到真实 USB 摄像头，使应用获取真实参数。
      * LENS_FACING 的伪装由 hookCameraCharacteristicsGet() 负责。
      */
-    private void hookGetCameraCharacteristics(final XC_LoadPackage.LoadPackageParam lpparam) {
+    private void hookGetCameraCharacteristics(ClassLoader classLoader) {
         try {
             XposedHelpers.findAndHookMethod(
                 "android.hardware.camera2.CameraManager",
-                lpparam.classLoader,
+                classLoader,
                 "getCameraCharacteristics",
                 String.class,
                 new XC_MethodHook() {
@@ -293,11 +294,11 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
      * 将 LENS_FACING_EXTERNAL 伪装为 LENS_FACING_FRONT，
      * 使应用将虚拟摄像头（实为 USB 摄像头）视为普通前置摄像头。
      */
-    private void hookCameraCharacteristicsGet(final XC_LoadPackage.LoadPackageParam lpparam) {
+    private void hookCameraCharacteristicsGet(ClassLoader classLoader) {
         try {
             XposedHelpers.findAndHookMethod(
                 "android.hardware.camera2.CameraCharacteristics",
-                lpparam.classLoader,
+                classLoader,
                 "get",
                 CameraCharacteristics.Key.class,
                 new XC_MethodHook() {

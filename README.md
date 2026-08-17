@@ -35,13 +35,13 @@ Xposed 模块：深度 Hook ByteRTC SDK 相机枚举与会话类，以及系统 
 
 ## 构建步骤
 
-1. 将 Xposed/LSPosed API jar 放入 `app/libs/xposed-api.jar`，或使用 Maven 依赖 `de.robv.android.xposed:api:82`（需 jitpack 仓库）。
+1. 项目已通过 Gradle 依赖自动引入 `io.github.libxposed:api:100-1.0.0`（Maven Central），无需手动放置 jar。
 2. 运行 `./gradlew assembleRelease` 构建 APK。
 3. 安装 APK：`adb install -r app/build/outputs/apk/release/app-release.apk`。
 
 ## 安装与启用
 
-1. 安装 APK 后，在 Xposed / EdXposed / LSPosed 管理器中启用该模块。
+1. 安装 APK 后，在 **LSPosed**（API 100+）管理器中启用该模块；旧版 EdXposed / Xposed 不支持。
 2. 重启设备或重载框架。
 3. 打开桌面上的"UVC Camera Hook 目标选择"图标，在 UI 中选择目标应用并保存。
 4. 重启目标应用，通过 `adb logcat | grep ByteRtcCameraHook` 或 `adb logcat | grep Camera1EnumeratorHook` 查看 hook 日志。
