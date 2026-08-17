@@ -440,33 +440,12 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
 
     /**
      * 当水平镜像开关启用时调用：
-     * 1. 通过 Camera.setParameters() 向 HAL 传递 "mirror"="true" 参数（OEM 设备支持）。
-     * 2. 通过包装 Camera.PreviewCallback / Camera.setPreviewCallbackWithBuffer 的回调，
-     *    在软件层对 NV21 帧数据进行水平翻转，适用于不支持 HAL 级别镜像的设备。
+     * 通过包装 Camera.PreviewCallback / Camera.setPreviewCallbackWithBuffer 的回调，
+     * 在软件层对 NV21 帧数据进行水平翻转。
+     * 注意：未使用 Camera.setParameters("mirror","true") HAL 级提示，以避免在支持该参数的
+     * OEM 设备上出现 HAL + 软件双重翻转相互抵消的问题。
      */
     private void hookCamera1Mirror() {
-        // HAL 级镜像参数（在支持的 OEM 设备上优先生效）
-        try {
-            XposedHelpers.findAndHookMethod(
-                Camera.class,
-                "setParameters",
-                Camera.Parameters.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                        Camera.Parameters p = (Camera.Parameters) param.args[0];
-                        if (p != null) {
-                            p.set("mirror", "true");
-                        }
-                    }
-                }
-            );
-            XposedBridge.log(TAG + ": Camera.setParameters mirror hook installed");
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + ": failed to hook Camera.setParameters for mirror: "
-                    + t.getMessage());
-        }
-
         // 软件层 NV21 水平翻转：包装预览回调
         final XC_MethodHook callbackWrapHook = new XC_MethodHook() {
             @Override
@@ -558,7 +537,7 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
 
         @Override
         public void onPreviewFrame(byte[] data, Camera camera) {
-            if (data != null && data.length >= width * height * 3 / 2) {
+            if (data != null && data.length >= (width * height * 3) / 2) {
                 flipHorizontalNV21InPlace(data, width, height);
             }
             delegate.onPreviewFrame(data, camera);
