@@ -39,6 +39,9 @@ public class MainModule extends XposedModule {
         virtualCameraHook.apply(packageName, classLoader, prefs);
         camera1EnumeratorHook.apply(packageName, classLoader, prefs);
         byteRtcCameraHook.apply(packageName, classLoader, prefs);
+        // Module uses a hard-coded TARGET_PACKAGE constant rather than reading user prefs;
+        // it applies global Camera2 reordering and legacy Camera redirection for all packages
+        // (or a compile-time-fixed target) and does not need per-user preference isolation.
         legacyModule.apply(packageName, classLoader);
     }
 }
