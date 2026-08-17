@@ -16,7 +16,7 @@
             android:value="true" />
         <meta-data
             android:name="xposedminversion"
-            android:value="53" />
+            android:value="100" />
         <meta-data
             android:name="xposeddescription"
             android:value="Hook Camera APIs to prefer external (UVC) cameras" />

@@ -1,13 +1,11 @@
 package com.everone11.uvccamera.xposed;
 
+import android.content.SharedPreferences;
 import android.hardware.Camera;
 
-import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XSharedPreferences;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
-import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -25,13 +23,12 @@ import java.util.List;
  * - com.ss.bytertc.base.media.camera.Camera1Enumerator: getDeviceNames(), getSupportedFormats(int)
  * - com.ss.bytertc.base.media.camera.Camera1Session: create(), startCapturing()
  * - com.ss.bytertc.base.media.camera.Camera2Session: create()
+ *
+ * 由 MainModule 统一调度，通过 apply() 而非 IXposedHookLoadPackage 接口触发。
  */
-public class ByteRtcCameraHook implements IXposedHookLoadPackage {
+public class ByteRtcCameraHook {
 
     private static final String TAG = "ByteRtcCameraHook";
-
-    // Module package name used to read shared preferences via XSharedPreferences.
-    private static final String MODULE_PACKAGE = "com.everone11.uvccamera.xposed";
 
     private static final String BYTERTC_CAMERA1_ENUMERATOR =
             "com.ss.bytertc.base.media.camera.Camera1Enumerator";
@@ -55,25 +52,28 @@ public class ByteRtcCameraHook implements IXposedHookLoadPackage {
         {640,  480,  15},
     };
 
-    @Override
-    public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
-        XSharedPreferences prefs = new XSharedPreferences(
-                MODULE_PACKAGE, PrefManager.PREF_NAME);
-        prefs.reload();
+    /**
+     * 在目标包加载时安装 Hook。
+     *
+     * @param packageName  目标应用包名
+     * @param classLoader  目标应用的 ClassLoader
+     * @param prefs        模块 SharedPreferences（由 MainModule 通过 getSharedPreferences() 提供）
+     */
+    public void apply(String packageName, ClassLoader classLoader, SharedPreferences prefs) {
         String targetPkg = prefs.getString(PrefManager.KEY_TARGET_PACKAGE, "");
 
         if (targetPkg != null && !targetPkg.isEmpty()) {
-            if (!lpparam.packageName.equals(targetPkg)) {
+            if (!packageName.equals(targetPkg)) {
                 return;
             }
         }
 
-        XposedBridge.log(TAG + ": loaded for " + lpparam.packageName);
+        XposedBridge.log(TAG + ": loaded for " + packageName);
 
         hookGetNumberOfCameras();
-        hookCamera1Enumerator(lpparam, prefs);
-        hookCamera1Session(lpparam, prefs);
-        hookCamera2Session(lpparam, prefs);
+        hookCamera1Enumerator(classLoader, prefs);
+        hookCamera1Session(classLoader, prefs);
+        hookCamera2Session(classLoader, prefs);
     }
 
     /**
@@ -108,13 +108,12 @@ public class ByteRtcCameraHook implements IXposedHookLoadPackage {
      * - getDeviceNames(): return at least ["0"] to ensure the UVC camera is discovered.
      * - getSupportedFormats(int): return UVC-compatible fallback formats when the result is empty.
      */
-    private void hookCamera1Enumerator(final XC_LoadPackage.LoadPackageParam lpparam,
-            XSharedPreferences prefs) {
+    private void hookCamera1Enumerator(ClassLoader classLoader, SharedPreferences prefs) {
         String className = prefs.getString(
                 PrefManager.KEY_ENUMERATOR_CLASS, PrefManager.DEFAULT_ENUMERATOR_CLASS);
         Class<?> enumClass;
         try {
-            enumClass = XposedHelpers.findClass(className, lpparam.classLoader);
+            enumClass = XposedHelpers.findClass(className, classLoader);
         } catch (XposedHelpers.ClassNotFoundError e) {
             // Expected when this app does not include the ByteRTC SDK; fail silently.
             return;
@@ -245,13 +244,12 @@ public class ByteRtcCameraHook implements IXposedHookLoadPackage {
      * Logs all invocations so issues on Android 14 TV can be diagnosed via logcat.
      * This allows lower-level UVC hooks to substitute the real camera device.
      */
-    private void hookCamera1Session(final XC_LoadPackage.LoadPackageParam lpparam,
-            XSharedPreferences prefs) {
+    private void hookCamera1Session(ClassLoader classLoader, SharedPreferences prefs) {
         String className = prefs.getString(
                 PrefManager.KEY_SESSION1_CLASS, PrefManager.DEFAULT_SESSION1_CLASS);
         Class<?> sessionClass;
         try {
-            sessionClass = XposedHelpers.findClass(className, lpparam.classLoader);
+            sessionClass = XposedHelpers.findClass(className, classLoader);
         } catch (XposedHelpers.ClassNotFoundError e) {
             // Expected when this app does not include the ByteRTC SDK; fail silently.
             return;
@@ -296,13 +294,12 @@ public class ByteRtcCameraHook implements IXposedHookLoadPackage {
      * Hook Camera2Session to intercept create().
      * Logs session creation so failures on Android 14 TV can be diagnosed.
      */
-    private void hookCamera2Session(final XC_LoadPackage.LoadPackageParam lpparam,
-            XSharedPreferences prefs) {
+    private void hookCamera2Session(ClassLoader classLoader, SharedPreferences prefs) {
         String className = prefs.getString(
                 PrefManager.KEY_SESSION2_CLASS, PrefManager.DEFAULT_SESSION2_CLASS);
         Class<?> sessionClass;
         try {
-            sessionClass = XposedHelpers.findClass(className, lpparam.classLoader);
+            sessionClass = XposedHelpers.findClass(className, classLoader);
         } catch (XposedHelpers.ClassNotFoundError e) {
             // Expected when this app does not include the ByteRTC SDK; fail silently.
             return;

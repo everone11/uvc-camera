@@ -1,32 +1,31 @@
 package com.everone11.uvccamera.xposed;
 
-import de.robv.android.xposed.IXposedHookLoadPackage;
-import de.robv.android.xposed.XSharedPreferences;
-import de.robv.android.xposed.callbacks.XC_LoadPackage;
-import de.robv.android.xposed.XposedHelpers;
+import android.content.SharedPreferences;
+
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
+import de.robv.android.xposed.XposedHelpers;
 
 import java.util.List;
 
 /**
- * Xposed Hook：读取用户在 MainActivity 中选择的目标包名，
- * 仅对该应用 Hook Camera1Enumerator.getSupportedFormats。
- * 若未选择特定应用，则对所有加载的包生效。
+ * Hook Camera1Enumerator.getSupportedFormats，读取格式列表并清空静态缓存。
+ * 由 MainModule 统一调度，通过 apply() 而非 IXposedHookLoadPackage 接口触发。
  */
-public class Camera1EnumeratorHook implements IXposedHookLoadPackage {
+public class Camera1EnumeratorHook {
 
-    @Override
-    public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
-        // 从模块 SharedPreferences 读取用户选择的目标包名
-        XSharedPreferences prefs = new XSharedPreferences(
-                "com.everone11.uvccamera.xposed", PrefManager.PREF_NAME);
-        prefs.reload();
+    /**
+     * 在目标包加载时安装 Hook。
+     *
+     * @param packageName  目标应用包名
+     * @param classLoader  目标应用的 ClassLoader
+     * @param prefs        模块 SharedPreferences（由 MainModule 通过 getSharedPreferences() 提供）
+     */
+    public void apply(String packageName, ClassLoader classLoader, SharedPreferences prefs) {
         String targetPkg = prefs.getString(PrefManager.KEY_TARGET_PACKAGE, "");
 
-        // 若已选择特定应用，则跳过其他包
         if (targetPkg != null && !targetPkg.isEmpty()) {
-            if (!lpparam.packageName.equals(targetPkg)) {
+            if (!packageName.equals(targetPkg)) {
                 return;
             }
         }
@@ -35,11 +34,11 @@ public class Camera1EnumeratorHook implements IXposedHookLoadPackage {
         String enumeratorClass = prefs.getString(
                 PrefManager.KEY_ENUMERATOR_CLASS, PrefManager.DEFAULT_ENUMERATOR_CLASS);
 
-        XposedBridge.log("Camera1EnumeratorHook loaded in: " + lpparam.packageName);
+        XposedBridge.log("Camera1EnumeratorHook loaded in: " + packageName);
         try {
             final Class<?> enumClass = XposedHelpers.findClass(
                 enumeratorClass,
-                lpparam.classLoader
+                classLoader
             );
 
             XposedHelpers.findAndHookMethod(
@@ -76,3 +75,4 @@ public class Camera1EnumeratorHook implements IXposedHookLoadPackage {
         }
     }
 }
+

@@ -6,38 +6,42 @@ import android.hardware.camera2.CameraMetadata;
 import android.hardware.Camera;
 import android.hardware.Camera.CameraInfo;
 
-import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XC_MethodReplacement;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
-import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * LSPosed module entry: hook Camera2 and legacy Camera API to prefer external cameras.
+ * LSPosed module: hook Camera2 and legacy Camera API to prefer external cameras.
+ * 由 MainModule 统一调度，通过 apply() 而非 IXposedHookLoadPackage 接口触发。
  */
-public class Module implements IXposedHookLoadPackage {
+public class Module {
     // Empty = global effect. Set to a package name like "com.example.ttjump" to restrict.
     private static final String TARGET_PACKAGE = "";
 
-    @Override
-    public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
+    /**
+     * 在目标包加载时安装 Hook。
+     *
+     * @param packageName 目标应用包名
+     * @param classLoader 目标应用的 ClassLoader
+     */
+    public void apply(String packageName, ClassLoader classLoader) {
         if (TARGET_PACKAGE != null && TARGET_PACKAGE.length() > 0) {
-            if (!TARGET_PACKAGE.equals(lpparam.packageName)) {
+            if (!TARGET_PACKAGE.equals(packageName)) {
                 return;
             }
         }
 
-        XposedBridge.log("uvcforce: loaded for " + lpparam.packageName);
+        XposedBridge.log("uvcforce: loaded for " + packageName);
 
         // Hook Camera2.getCameraIdList
         try {
             XposedHelpers.findAndHookMethod(
                 "android.hardware.camera2.CameraManager",
-                lpparam.classLoader,
+                classLoader,
                 "getCameraIdList",
                 new XC_MethodHook() {
                     @Override
@@ -142,7 +146,7 @@ public class Module implements IXposedHookLoadPackage {
         try {
             final Class<?> enumClass = XposedHelpers.findClass(
                 "com.ss.bytertc.base.media.camera.Camera1Enumerator",
-                lpparam.classLoader
+                classLoader
             );
 
             XposedHelpers.findAndHookMethod(
@@ -179,7 +183,7 @@ public class Module implements IXposedHookLoadPackage {
         try {
             XposedHelpers.findAndHookMethod(
                 "android.hardware.Camera$Parameters",
-                lpparam.classLoader,
+                classLoader,
                 "getSupportedPreviewFpsRange",
                 new XC_MethodHook() {
                     @Override
@@ -203,7 +207,7 @@ public class Module implements IXposedHookLoadPackage {
         try {
             XposedHelpers.findAndHookMethod(
                 "android.hardware.Camera$Parameters",
-                lpparam.classLoader,
+                classLoader,
                 "getSupportedPictureSizes",
                 new XC_MethodHook() {
                     @Override
@@ -310,7 +314,7 @@ public class Module implements IXposedHookLoadPackage {
         try {
             XposedHelpers.findAndHookMethod(
                 "android.hardware.camera2.CameraCharacteristics",
-                lpparam.classLoader,
+                classLoader,
                 "get",
                 CameraCharacteristics.Key.class,
                 new XC_MethodHook() {
