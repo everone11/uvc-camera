@@ -239,7 +239,7 @@ public class Module {
             xposed.log(Log.DEBUG, TAG, "failed to hook CameraManager.openCamera: " + t.getMessage());
         }
 
-        // Hook Camera1 getCameraInfo to spoof external camera as front-facing
+        // Hook Camera1 getCameraInfo to spoof external camera as back-facing
         try {
             Method m = Camera.class.getDeclaredMethod("getCameraInfo", int.class, Camera.CameraInfo.class);
             m.setAccessible(true);
@@ -247,8 +247,8 @@ public class Module {
                 chain.proceed();
                 Camera.CameraInfo info = (Camera.CameraInfo) chain.getArg(1);
                 if (info.facing == 2 /* CAMERA_FACING_EXTERNAL */) {
-                    info.facing = Camera.CameraInfo.CAMERA_FACING_FRONT;
-                    xposed.log(Log.DEBUG, TAG, "getCameraInfo spoofed external camera as FRONT");
+                    info.facing = Camera.CameraInfo.CAMERA_FACING_BACK;
+                    xposed.log(Log.DEBUG, TAG, "getCameraInfo spoofed external camera as BACK");
                 }
                 return null;
             });
@@ -256,7 +256,7 @@ public class Module {
             xposed.log(Log.DEBUG, TAG, "failed to hook Camera.getCameraInfo: " + t.getMessage());
         }
 
-        // Hook Camera2 CameraCharacteristics.get to spoof external LENS_FACING as front
+        // Hook Camera2 CameraCharacteristics.get to spoof external LENS_FACING as back
         try {
             Method m = Class.forName("android.hardware.camera2.CameraCharacteristics", false, classLoader)
                     .getDeclaredMethod("get", CameraCharacteristics.Key.class);
@@ -268,8 +268,8 @@ public class Module {
                         && result instanceof Integer
                         && (Integer) result == CameraMetadata.LENS_FACING_EXTERNAL) {
                     xposed.log(Log.DEBUG, TAG,
-                            "CameraCharacteristics.get(LENS_FACING) spoofed external as FRONT");
-                    return CameraMetadata.LENS_FACING_FRONT;
+                            "CameraCharacteristics.get(LENS_FACING) spoofed external as BACK");
+                    return CameraMetadata.LENS_FACING_BACK;
                 }
                 return result;
             });
