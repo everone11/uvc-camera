@@ -18,6 +18,6 @@ android {
 }
 
 dependencies {
-    // libxposed API 100（LSPosed 新版接口，XposedModule 入口 + 模块内 SharedPreferences 访问）
-    compileOnly 'io.github.libxposed:api:100-1.0.0'
+    // libxposed API 102（LSPosed 新版接口，XposedModule 入口 + 模块内 SharedPreferences 访问）
+    compileOnly 'io.github.libxposed:api:102-1.0.0'
 }
