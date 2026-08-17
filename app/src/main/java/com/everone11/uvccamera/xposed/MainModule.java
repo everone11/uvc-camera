@@ -9,7 +9,7 @@ import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
 
 /**
- * libxposed API 100+ 模块入口。
+ * libxposed API 102+ 模块入口。
  *
  * 取代各 Hook 类分散的 IXposedHookLoadPackage 实现，统一在此读取模块 SharedPreferences
  * 并分发至各 Hook 子模块。在 LSPosed 框架下，XposedModule 被注入为目标进程的 Application，
