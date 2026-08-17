@@ -66,6 +66,13 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
      */
     private static volatile Method cachedOpenIntMethod = null;
 
+    /**
+     * 缓存 CameraCharacteristics.get(Key) 的反射 Method 对象，用于在 USB 摄像头发现阶段
+     * 通过 XposedBridge.invokeOriginalMethod 绕过 hookCameraCharacteristicsGet 的
+     * LENS_FACING 伪装 Hook，读取真实的镜头朝向值。
+     */
+    private static volatile Method cachedCcGetMethod = null;
+
     /** 水平镜像开关：由 handleLoadPackage 从偏好设置读取。 */
     private static volatile boolean mirrorEnabled = false;
 
@@ -161,13 +168,43 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
                             if (cachedUvcId.get() == null) {
                                 synchronized (cachedUvcId) {
                                     if (cachedUvcId.get() == null) {
+                                        // 缓存 CameraCharacteristics.get(Key) 方法，用于绕过
+                                        // hookCameraCharacteristicsGet 的 LENS_FACING 伪装，
+                                        // 以读取真实的镜头朝向值。
+                                        if (cachedCcGetMethod == null) {
+                                            try {
+                                                cachedCcGetMethod =
+                                                        CameraCharacteristics.class.getMethod(
+                                                                "get",
+                                                                CameraCharacteristics.Key.class);
+                                            } catch (Throwable t) {
+                                                XposedBridge.log(TAG
+                                                        + ": failed to cache CameraCharacteristics"
+                                                        + ".get method: " + t.getMessage());
+                                            }
+                                        }
                                         CameraManager mgr = (CameraManager) param.thisObject;
                                         for (String id : ids) {
                                             try {
                                                 CameraCharacteristics ch =
                                                         mgr.getCameraCharacteristics(id);
-                                                Integer lens =
-                                                        ch.get(CameraCharacteristics.LENS_FACING);
+                                                // 使用原始方法绕过 LENS_FACING 伪装 Hook，
+                                                // 否则 hookCameraCharacteristicsGet 会将
+                                                // LENS_FACING_EXTERNAL 改为 LENS_FACING_FRONT，
+                                                // 导致此处永远无法发现 USB 摄像头。
+                                                // 若反射失败则回退到正常调用（值可能已被伪装）。
+                                                Integer lens;
+                                                if (cachedCcGetMethod != null) {
+                                                    lens = (Integer)
+                                                            XposedBridge.invokeOriginalMethod(
+                                                                    cachedCcGetMethod, ch,
+                                                                    new Object[]{
+                                                                            CameraCharacteristics
+                                                                                    .LENS_FACING});
+                                                } else {
+                                                    lens = ch.get(
+                                                            CameraCharacteristics.LENS_FACING);
+                                                }
                                                 if (lens != null
                                                         && lens == CameraCharacteristics.LENS_FACING_EXTERNAL) {
                                                     cachedUvcId.set(id);
