@@ -5,10 +5,9 @@ import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CameraMetadata;
 
-import de.robv.android.xposed.XC_MethodHook;
+import io.github.libxposed.api.XposedInterface;
 import android.content.SharedPreferences;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
+import android.util.Log;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -59,13 +58,13 @@ public class VirtualCameraHook {
 
     /**
      * 缓存 Camera.open(int) 的反射 Method 对象，用于在 Camera.open() 无参 Hook 中
-     * 通过 XposedBridge.invokeOriginalMethod 绕过 Hook 链直接调用原始实现。
+     * 通过 xposed.getInvoker(method).setType(ORIGIN) 绕过 Hook 链直接调用原始实现。
      */
     private static volatile Method cachedOpenIntMethod = null;
 
     /**
      * 缓存 CameraCharacteristics.get(Key) 的反射 Method 对象，用于在 USB 摄像头发现阶段
-     * 通过 XposedBridge.invokeOriginalMethod 绕过 hookCameraCharacteristicsGet 的
+     * 通过 xposed.getInvoker(method).setType(ORIGIN) 绕过 hookCameraCharacteristicsGet 的
      * LENS_FACING 伪装 Hook，读取真实的镜头朝向值。
      */
     private static volatile Method cachedCcGetMethod = null;
@@ -79,11 +78,12 @@ public class VirtualCameraHook {
     /**
      * 在目标包加载时安装 Hook。
      *
+     * @param xposed       libxposed API 102 接口实例（由 MainModule 传入）
      * @param packageName  目标应用包名
      * @param classLoader  目标应用的 ClassLoader
-     * @param prefs        模块 SharedPreferences（由 MainModule 通过 getSharedPreferences() 提供）
+     * @param prefs        模块 SharedPreferences（由 MainModule 通过 getRemotePreferences() 提供）
      */
-    public void apply(String packageName, ClassLoader classLoader, SharedPreferences prefs) {
+    public void apply(XposedInterface xposed, String packageName, ClassLoader classLoader, SharedPreferences prefs) {
         String targetPkg = prefs.getString(PrefManager.KEY_TARGET_PACKAGE, "");
 
         if (targetPkg != null && !targetPkg.isEmpty()) {
@@ -92,19 +92,19 @@ public class VirtualCameraHook {
             }
         }
 
-        XposedBridge.log(TAG + ": loaded for " + packageName);
+        xposed.log(Log.DEBUG, TAG, "loaded for " + packageName);
 
         mirrorEnabled = prefs.getBoolean(PrefManager.KEY_MIRROR_HORIZONTAL, false);
-        XposedBridge.log(TAG + ": mirrorEnabled=" + mirrorEnabled);
+        xposed.log(Log.DEBUG, TAG, "mirrorEnabled=" + mirrorEnabled);
 
         rotateCW90Enabled = prefs.getBoolean(PrefManager.KEY_ROTATE_CW90, false);
-        XposedBridge.log(TAG + ": rotateCW90Enabled=" + rotateCW90Enabled);
+        xposed.log(Log.DEBUG, TAG, "rotateCW90Enabled=" + rotateCW90Enabled);
 
         // 在安装 Hook 之前发现 Camera1 USB 摄像头索引，避免 Hook 自调用
-        discoverCamera1UvcIndex();
+        discoverCamera1UvcIndex(xposed);
 
-        hookCamera2(classLoader);
-        hookCamera1();
+        hookCamera2(xposed, classLoader);
+        hookCamera1(xposed);
     }
 
     // -------------------------------------------------------------------------
@@ -114,7 +114,7 @@ public class VirtualCameraHook {
     /**
      * 在 Hook 安装前，通过未被 Hook 的原始 Camera1 API 枚举外部摄像头索引并缓存。
      */
-    private void discoverCamera1UvcIndex() {
+    private void discoverCamera1UvcIndex(XposedInterface xposed) {
         try {
             int n = Camera.getNumberOfCameras();
             for (int i = 0; i < n; i++) {
@@ -122,13 +122,13 @@ public class VirtualCameraHook {
                 Camera.getCameraInfo(i, info);
                 if (info.facing == CAMERA_FACING_EXTERNAL) {
                     cachedUvcIndex.set(i);
-                    XposedBridge.log(TAG + ": Camera1 USB camera discovered at index " + i);
+                    xposed.log(Log.DEBUG, TAG, "Camera1 USB camera discovered at index " + i);
                     return;
                 }
             }
-            XposedBridge.log(TAG + ": no Camera1 USB camera found at startup");
+            xposed.log(Log.DEBUG, TAG, "no Camera1 USB camera found at startup");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": discoverCamera1UvcIndex error: " + t.getMessage());
+            xposed.log(Log.DEBUG, TAG, "discoverCamera1UvcIndex error: " + t.getMessage());
         }
     }
 
@@ -136,11 +136,11 @@ public class VirtualCameraHook {
     // Camera2 API hooks
     // -------------------------------------------------------------------------
 
-    private void hookCamera2(ClassLoader classLoader) {
-        hookGetCameraIdList(classLoader);
-        hookGetCameraCharacteristics(classLoader);
-        hookCameraCharacteristicsGet(classLoader);
-        hookOpenCamera();
+    private void hookCamera2(XposedInterface xposed, ClassLoader classLoader) {
+        hookGetCameraIdList(xposed, classLoader);
+        hookGetCameraCharacteristics(xposed, classLoader);
+        hookCameraCharacteristicsGet(xposed, classLoader);
+        hookOpenCamera(xposed);
     }
 
     /**
@@ -148,111 +148,88 @@ public class VirtualCameraHook {
      * 若存在 USB 摄像头，则在列表首位注入虚拟摄像头 ID "vc0"，
      * 同时将真实 USB 摄像头 ID 从列表中移除（对应用不可见）。
      */
-    private void hookGetCameraIdList(ClassLoader classLoader) {
+    private void hookGetCameraIdList(XposedInterface xposed, ClassLoader classLoader) {
         try {
-            XposedHelpers.findAndHookMethod(
-                "android.hardware.camera2.CameraManager",
-                classLoader,
-                "getCameraIdList",
-                new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        try {
-                            String[] ids = (String[]) param.getResult();
-                            if (ids == null) ids = new String[0];
+            Method m = Class.forName("android.hardware.camera2.CameraManager", false, classLoader)
+                    .getDeclaredMethod("getCameraIdList");
+            m.setAccessible(true);
+            xposed.hook(m).intercept(chain -> {
+                String[] ids = (String[]) chain.proceed();
+                if (ids == null) ids = new String[0];
 
-                            // 若已包含虚拟摄像头则直接返回，避免重复注入
-                            boolean alreadyInjected = false;
-                            for (String id : ids) {
-                                if (VIRTUAL_CAMERA_ID.equals(id)) {
-                                    alreadyInjected = true;
-                                    break;
+                // 若已包含虚拟摄像头则直接返回，避免重复注入
+                for (String id : ids) {
+                    if (VIRTUAL_CAMERA_ID.equals(id)) return ids;
+                }
+
+                // 懒加载：首次枚举时发现并缓存 USB 摄像头 ID（加锁防止多线程重复发现）
+                if (cachedUvcId.get() == null) {
+                    synchronized (cachedUvcId) {
+                        if (cachedUvcId.get() == null) {
+                            // 缓存 CameraCharacteristics.get(Key) 方法，用于绕过
+                            // hookCameraCharacteristicsGet 的 LENS_FACING 伪装，
+                            // 以读取真实的镜头朝向值。
+                            if (cachedCcGetMethod == null) {
+                                try {
+                                    cachedCcGetMethod = CameraCharacteristics.class
+                                            .getMethod("get", CameraCharacteristics.Key.class);
+                                } catch (Throwable t) {
+                                    xposed.log(Log.DEBUG, TAG,
+                                            "failed to cache CameraCharacteristics.get method: "
+                                                    + t.getMessage());
                                 }
                             }
-                            if (alreadyInjected) return;
-
-                            // 懒加载：首次枚举时发现并缓存 USB 摄像头 ID（加锁防止多线程重复发现）
-                            if (cachedUvcId.get() == null) {
-                                synchronized (cachedUvcId) {
-                                    if (cachedUvcId.get() == null) {
-                                        // 缓存 CameraCharacteristics.get(Key) 方法，用于绕过
-                                        // hookCameraCharacteristicsGet 的 LENS_FACING 伪装，
-                                        // 以读取真实的镜头朝向值。
-                                        if (cachedCcGetMethod == null) {
-                                            try {
-                                                cachedCcGetMethod =
-                                                        CameraCharacteristics.class.getMethod(
-                                                                "get",
-                                                                CameraCharacteristics.Key.class);
-                                            } catch (Throwable t) {
-                                                XposedBridge.log(TAG
-                                                        + ": failed to cache CameraCharacteristics"
-                                                        + ".get method: " + t.getMessage());
-                                            }
-                                        }
-                                        CameraManager mgr = (CameraManager) param.thisObject;
-                                        for (String id : ids) {
-                                            try {
-                                                CameraCharacteristics ch =
-                                                        mgr.getCameraCharacteristics(id);
-                                                // 使用原始方法绕过 LENS_FACING 伪装 Hook，
-                                                // 否则 hookCameraCharacteristicsGet 会将
-                                                // LENS_FACING_EXTERNAL 改为 LENS_FACING_FRONT，
-                                                // 导致此处永远无法发现 USB 摄像头。
-                                                // 若反射失败则回退到正常调用（值可能已被伪装）。
-                                                Integer lens;
-                                                if (cachedCcGetMethod != null) {
-                                                    lens = (Integer)
-                                                            XposedBridge.invokeOriginalMethod(
-                                                                    cachedCcGetMethod, ch,
-                                                                    new Object[]{
-                                                                            CameraCharacteristics
-                                                                                    .LENS_FACING});
-                                                } else {
-                                                    lens = ch.get(
-                                                            CameraCharacteristics.LENS_FACING);
-                                                }
-                                                if (lens != null
-                                                        && lens == CameraCharacteristics.LENS_FACING_EXTERNAL) {
-                                                    cachedUvcId.set(id);
-                                                    XposedBridge.log(TAG
-                                                            + ": Camera2 USB camera discovered: "
-                                                            + id);
-                                                    break;
-                                                }
-                                            } catch (Throwable t) {
-                                                // 单个摄像头查询失败，跳过
-                                            }
-                                        }
+                            CameraManager mgr = (CameraManager) chain.getThisObject();
+                            for (String id : ids) {
+                                try {
+                                    CameraCharacteristics ch = mgr.getCameraCharacteristics(id);
+                                    // 使用原始方法绕过 LENS_FACING 伪装 Hook，
+                                    // 否则 hookCameraCharacteristicsGet 会将
+                                    // LENS_FACING_EXTERNAL 改为 LENS_FACING_FRONT，
+                                    // 导致此处永远无法发现 USB 摄像头。
+                                    // 若反射失败则回退到正常调用（值可能已被伪装）。
+                                    Integer lens;
+                                    if (cachedCcGetMethod != null) {
+                                        lens = (Integer) xposed
+                                                .getInvoker(cachedCcGetMethod)
+                                                .setType(XposedInterface.Invoker.Type.ORIGIN)
+                                                .invoke(ch, CameraCharacteristics.LENS_FACING);
+                                    } else {
+                                        lens = ch.get(CameraCharacteristics.LENS_FACING);
                                     }
+                                    if (lens != null
+                                            && lens == CameraCharacteristics.LENS_FACING_EXTERNAL) {
+                                        cachedUvcId.set(id);
+                                        xposed.log(Log.DEBUG, TAG,
+                                                "Camera2 USB camera discovered: " + id);
+                                        break;
+                                    }
+                                } catch (Throwable t) {
+                                    // 单个摄像头查询失败，跳过
                                 }
                             }
-
-                            String uvcId = cachedUvcId.get();
-                            if (uvcId == null) return; // 无 USB 摄像头，不做处理
-
-                            // 构建新列表：虚拟摄像头在首位，隐藏真实 USB 摄像头 ID
-                            List<String> newList = new ArrayList<>();
-                            newList.add(VIRTUAL_CAMERA_ID);
-                            for (String id : ids) {
-                                if (!id.equals(uvcId)) {
-                                    newList.add(id);
-                                }
-                            }
-                            param.setResult(newList.toArray(new String[0]));
-                            XposedBridge.log(TAG + ": getCameraIdList injected virtual camera "
-                                    + VIRTUAL_CAMERA_ID + " (backed by " + uvcId
-                                    + "). list=" + newList);
-                        } catch (Throwable t) {
-                            XposedBridge.log(TAG + ": getCameraIdList hook error: "
-                                    + t.getMessage());
                         }
                     }
                 }
-            );
-            XposedBridge.log(TAG + ": getCameraIdList hook installed");
+
+                String uvcId = cachedUvcId.get();
+                if (uvcId == null) return ids; // 无 USB 摄像头，不做处理
+
+                // 构建新列表：虚拟摄像头在首位，隐藏真实 USB 摄像头 ID
+                List<String> newList = new ArrayList<>();
+                newList.add(VIRTUAL_CAMERA_ID);
+                for (String id : ids) {
+                    if (!id.equals(uvcId)) newList.add(id);
+                }
+                String[] result = newList.toArray(new String[0]);
+                xposed.log(Log.DEBUG, TAG, "getCameraIdList injected virtual camera "
+                        + VIRTUAL_CAMERA_ID + " (backed by " + uvcId
+                        + "). list=" + newList);
+                return result;
+            });
+            xposed.log(Log.DEBUG, TAG, "getCameraIdList hook installed");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": failed to hook getCameraIdList: " + t.getMessage());
+            xposed.log(Log.DEBUG, TAG, "failed to hook getCameraIdList: " + t.getMessage());
         }
     }
 
@@ -261,30 +238,24 @@ public class VirtualCameraHook {
      * 将虚拟摄像头 ID "vc0" 透明地重定向到真实 USB 摄像头，使应用获取真实参数。
      * LENS_FACING 的伪装由 hookCameraCharacteristicsGet() 负责。
      */
-    private void hookGetCameraCharacteristics(ClassLoader classLoader) {
+    private void hookGetCameraCharacteristics(XposedInterface xposed, ClassLoader classLoader) {
         try {
-            XposedHelpers.findAndHookMethod(
-                "android.hardware.camera2.CameraManager",
-                classLoader,
-                "getCameraCharacteristics",
-                String.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                        String id = (String) param.args[0];
-                        String uvcId = cachedUvcId.get();
-                        if (VIRTUAL_CAMERA_ID.equals(id) && uvcId != null) {
-                            param.args[0] = uvcId;
-                            XposedBridge.log(TAG + ": getCameraCharacteristics("
-                                    + VIRTUAL_CAMERA_ID + ") -> redirected to USB camera "
-                                    + uvcId);
-                        }
-                    }
+            Method m = Class.forName("android.hardware.camera2.CameraManager", false, classLoader)
+                    .getDeclaredMethod("getCameraCharacteristics", String.class);
+            m.setAccessible(true);
+            xposed.hook(m).intercept(chain -> {
+                String id = (String) chain.getArg(0);
+                String uvcId = cachedUvcId.get();
+                if (VIRTUAL_CAMERA_ID.equals(id) && uvcId != null) {
+                    xposed.log(Log.DEBUG, TAG, "getCameraCharacteristics("
+                            + VIRTUAL_CAMERA_ID + ") -> redirected to USB camera " + uvcId);
+                    return chain.proceed(new Object[]{uvcId});
                 }
-            );
-            XposedBridge.log(TAG + ": getCameraCharacteristics hook installed");
+                return chain.proceed();
+            });
+            xposed.log(Log.DEBUG, TAG, "getCameraCharacteristics hook installed");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": failed to hook getCameraCharacteristics: "
+            xposed.log(Log.DEBUG, TAG, "failed to hook getCameraCharacteristics: "
                     + t.getMessage());
         }
     }
@@ -294,33 +265,28 @@ public class VirtualCameraHook {
      * 将 LENS_FACING_EXTERNAL 伪装为 LENS_FACING_FRONT，
      * 使应用将虚拟摄像头（实为 USB 摄像头）视为普通前置摄像头。
      */
-    private void hookCameraCharacteristicsGet(ClassLoader classLoader) {
+    private void hookCameraCharacteristicsGet(XposedInterface xposed, ClassLoader classLoader) {
         try {
-            XposedHelpers.findAndHookMethod(
-                "android.hardware.camera2.CameraCharacteristics",
-                classLoader,
-                "get",
-                CameraCharacteristics.Key.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        CameraCharacteristics.Key<?> key =
-                                (CameraCharacteristics.Key<?>) param.args[0];
-                        if (CameraCharacteristics.LENS_FACING.equals(key)) {
-                            Object result = param.getResult();
-                            if (result instanceof Integer
-                                    && (Integer) result == CameraMetadata.LENS_FACING_EXTERNAL) {
-                                param.setResult(CameraMetadata.LENS_FACING_FRONT);
-                                XposedBridge.log(TAG + ": LENS_FACING_EXTERNAL spoofed"
-                                        + " as LENS_FACING_FRONT for virtual camera");
-                            }
-                        }
-                    }
+            Method m = Class.forName("android.hardware.camera2.CameraCharacteristics",
+                    false, classLoader)
+                    .getDeclaredMethod("get", CameraCharacteristics.Key.class);
+            m.setAccessible(true);
+            xposed.hook(m).intercept(chain -> {
+                Object result = chain.proceed();
+                CameraCharacteristics.Key<?> key =
+                        (CameraCharacteristics.Key<?>) chain.getArg(0);
+                if (CameraCharacteristics.LENS_FACING.equals(key)
+                        && result instanceof Integer
+                        && (Integer) result == CameraMetadata.LENS_FACING_EXTERNAL) {
+                    xposed.log(Log.DEBUG, TAG, "LENS_FACING_EXTERNAL spoofed"
+                            + " as LENS_FACING_FRONT for virtual camera");
+                    return CameraMetadata.LENS_FACING_FRONT;
                 }
-            );
-            XposedBridge.log(TAG + ": CameraCharacteristics.get hook installed");
+                return result;
+            });
+            xposed.log(Log.DEBUG, TAG, "CameraCharacteristics.get hook installed");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": failed to hook CameraCharacteristics.get: "
+            xposed.log(Log.DEBUG, TAG, "failed to hook CameraCharacteristics.get: "
                     + t.getMessage());
         }
     }
@@ -330,29 +296,30 @@ public class VirtualCameraHook {
      * 当应用请求打开虚拟摄像头 "vc0" 时，将 ID 替换为真实 USB 摄像头 ID，
      * 实现虚拟摄像头 → USB 摄像头的透明转发。
      */
-    private void hookOpenCamera() {
+    private void hookOpenCamera(XposedInterface xposed) {
         try {
             Class<?> cameraManagerClass =
                     Class.forName("android.hardware.camera2.CameraManager");
-            for (java.lang.reflect.Method method : cameraManagerClass.getDeclaredMethods()) {
+            for (Method method : cameraManagerClass.getDeclaredMethods()) {
                 if ("openCamera".equals(method.getName())) {
-                    XposedBridge.hookMethod(method, new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                            String requestedId = (String) param.args[0];
-                            String uvcId = cachedUvcId.get();
-                            if (VIRTUAL_CAMERA_ID.equals(requestedId) && uvcId != null) {
-                                param.args[0] = uvcId;
-                                XposedBridge.log(TAG + ": openCamera(" + VIRTUAL_CAMERA_ID
-                                        + ") -> forwarded to USB camera " + uvcId);
-                            }
+                    method.setAccessible(true);
+                    xposed.hook(method).intercept(chain -> {
+                        String requestedId = (String) chain.getArg(0);
+                        String uvcId = cachedUvcId.get();
+                        if (VIRTUAL_CAMERA_ID.equals(requestedId) && uvcId != null) {
+                            xposed.log(Log.DEBUG, TAG, "openCamera(" + VIRTUAL_CAMERA_ID
+                                    + ") -> forwarded to USB camera " + uvcId);
+                            Object[] args = chain.getArgs().toArray(new Object[0]);
+                            args[0] = uvcId;
+                            return chain.proceed(args);
                         }
+                        return chain.proceed();
                     });
                 }
             }
-            XposedBridge.log(TAG + ": openCamera hook installed");
+            xposed.log(Log.DEBUG, TAG, "openCamera hook installed");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": failed to hook openCamera: " + t.getMessage());
+            xposed.log(Log.DEBUG, TAG, "failed to hook openCamera: " + t.getMessage());
         }
     }
 
@@ -360,15 +327,15 @@ public class VirtualCameraHook {
     // Camera1 (legacy) API hooks
     // -------------------------------------------------------------------------
 
-    private void hookCamera1() {
-        hookGetCameraInfo();
-        hookCameraOpenInt();
-        hookCameraOpenNoArg();
+    private void hookCamera1(XposedInterface xposed) {
+        hookGetCameraInfo(xposed);
+        hookCameraOpenInt(xposed);
+        hookCameraOpenNoArg(xposed);
         if (mirrorEnabled) {
-            hookCamera1Mirror();
+            hookCamera1Mirror(xposed);
         }
         if (rotateCW90Enabled) {
-            hookCamera1RotateCW90();
+            hookCamera1RotateCW90(xposed);
         }
     }
 
@@ -377,28 +344,24 @@ public class VirtualCameraHook {
      * 将 USB/外部摄像头（facing == 2，CAMERA_FACING_EXTERNAL）报告为前置摄像头，
      * 使旧版 Camera1 API 的应用将其视为虚拟前置摄像头。
      */
-    private void hookGetCameraInfo() {
+    private void hookGetCameraInfo(XposedInterface xposed) {
         try {
-            XposedHelpers.findAndHookMethod(
-                Camera.class,
-                "getCameraInfo",
-                int.class,
-                Camera.CameraInfo.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        Camera.CameraInfo info = (Camera.CameraInfo) param.args[1];
-                        if (info.facing == CAMERA_FACING_EXTERNAL) {
-                            info.facing = Camera.CameraInfo.CAMERA_FACING_FRONT;
-                            XposedBridge.log(TAG + ": Camera.getCameraInfo: USB camera"
-                                    + " spoofed as CAMERA_FACING_FRONT (virtual camera)");
-                        }
-                    }
+            Method m = Camera.class.getDeclaredMethod("getCameraInfo",
+                    int.class, Camera.CameraInfo.class);
+            m.setAccessible(true);
+            xposed.hook(m).intercept(chain -> {
+                chain.proceed();
+                Camera.CameraInfo info = (Camera.CameraInfo) chain.getArg(1);
+                if (info.facing == CAMERA_FACING_EXTERNAL) {
+                    info.facing = Camera.CameraInfo.CAMERA_FACING_FRONT;
+                    xposed.log(Log.DEBUG, TAG, "Camera.getCameraInfo: USB camera"
+                            + " spoofed as CAMERA_FACING_FRONT (virtual camera)");
                 }
-            );
-            XposedBridge.log(TAG + ": Camera.getCameraInfo hook installed");
+                return null;
+            });
+            xposed.log(Log.DEBUG, TAG, "Camera.getCameraInfo hook installed");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": failed to hook Camera.getCameraInfo: " + t.getMessage());
+            xposed.log(Log.DEBUG, TAG, "failed to hook Camera.getCameraInfo: " + t.getMessage());
         }
     }
 
@@ -406,37 +369,28 @@ public class VirtualCameraHook {
      * Hook Camera.open(int cameraId)：
      * 当应用打开任意摄像头且 USB 摄像头存在时，将请求透明地转发到 USB 摄像头，
      * 实现虚拟摄像头层到真实 USB 摄像头的转发。
-     * 注意：与 Camera2 的 "vc0" 类似，Camera1 中所有摄像头请求均优先转发到 USB 摄像头，
-     * 与现有 Module.java 的行为保持一致（始终优选 USB 摄像头）。
      */
-    private void hookCameraOpenInt() {
+    private void hookCameraOpenInt(XposedInterface xposed) {
         try {
-            XposedHelpers.findAndHookMethod(
-                Camera.class,
-                "open",
-                int.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                        try {
-                            int requested = (Integer) param.args[0];
-                            int uvcIdx = cachedUvcIndex.get();
-                            if (uvcIdx >= 0 && uvcIdx != requested) {
-                                param.args[0] = uvcIdx;
-                                XposedBridge.log(TAG + ": Camera.open(" + requested
-                                        + ") -> virtual camera forwarded to USB camera index "
-                                        + uvcIdx);
-                            }
-                        } catch (Throwable t) {
-                            XposedBridge.log(TAG + ": Camera.open(int) hook error: "
-                                    + t.getMessage());
-                        }
+            Method m = Camera.class.getDeclaredMethod("open", int.class);
+            m.setAccessible(true);
+            xposed.hook(m).intercept(chain -> {
+                try {
+                    int requested = (Integer) chain.getArg(0);
+                    int uvcIdx = cachedUvcIndex.get();
+                    if (uvcIdx >= 0 && uvcIdx != requested) {
+                        xposed.log(Log.DEBUG, TAG, "Camera.open(" + requested
+                                + ") -> virtual camera forwarded to USB camera index " + uvcIdx);
+                        return chain.proceed(new Object[]{uvcIdx});
                     }
+                } catch (Throwable t) {
+                    xposed.log(Log.DEBUG, TAG, "Camera.open(int) hook error: " + t.getMessage());
                 }
-            );
-            XposedBridge.log(TAG + ": Camera.open(int) hook installed");
+                return chain.proceed();
+            });
+            xposed.log(Log.DEBUG, TAG, "Camera.open(int) hook installed");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": failed to hook Camera.open(int): " + t.getMessage());
+            xposed.log(Log.DEBUG, TAG, "failed to hook Camera.open(int): " + t.getMessage());
         }
     }
 
@@ -445,39 +399,35 @@ public class VirtualCameraHook {
      * 默认打开第一个摄像头；若 USB 摄像头存在，则通过调用原始 Camera.open(int)
      * 绕过 Hook 链，直接打开 USB 摄像头索引。
      */
-    private void hookCameraOpenNoArg() {
+    private void hookCameraOpenNoArg(XposedInterface xposed) {
         try {
-            XposedHelpers.findAndHookMethod(
-                Camera.class,
-                "open",
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                        try {
-                            int uvcIdx = cachedUvcIndex.get();
-                            if (uvcIdx >= 0) {
-                                // 使用原始（未 Hook）Camera.open(int) 方法，避免触发 hookCameraOpenInt
-                                if (cachedOpenIntMethod == null) {
-                                    cachedOpenIntMethod =
-                                            Camera.class.getDeclaredMethod("open", int.class);
-                                }
-                                Camera cam = (Camera) XposedBridge.invokeOriginalMethod(
-                                        cachedOpenIntMethod, null, new Object[]{uvcIdx});
-                                param.setResult(cam);
-                                XposedBridge.log(TAG + ": Camera.open()"
-                                        + " -> virtual camera forwarded to USB camera index "
-                                        + uvcIdx);
-                            }
-                        } catch (Throwable t) {
-                            XposedBridge.log(TAG + ": Camera.open() hook error: "
-                                    + t.getMessage());
+            Method m = Camera.class.getDeclaredMethod("open");
+            m.setAccessible(true);
+            xposed.hook(m).intercept(chain -> {
+                try {
+                    int uvcIdx = cachedUvcIndex.get();
+                    if (uvcIdx >= 0) {
+                        // 使用原始（未 Hook）Camera.open(int) 方法，避免触发 hookCameraOpenInt
+                        if (cachedOpenIntMethod == null) {
+                            cachedOpenIntMethod =
+                                    Camera.class.getDeclaredMethod("open", int.class);
+                            cachedOpenIntMethod.setAccessible(true);
                         }
+                        Camera cam = (Camera) xposed.getInvoker(cachedOpenIntMethod)
+                                .setType(XposedInterface.Invoker.Type.ORIGIN)
+                                .invoke(null, uvcIdx);
+                        xposed.log(Log.DEBUG, TAG, "Camera.open()"
+                                + " -> virtual camera forwarded to USB camera index " + uvcIdx);
+                        return cam;
                     }
+                } catch (Throwable t) {
+                    xposed.log(Log.DEBUG, TAG, "Camera.open() hook error: " + t.getMessage());
                 }
-            );
-            XposedBridge.log(TAG + ": Camera.open() hook installed");
+                return chain.proceed();
+            });
+            xposed.log(Log.DEBUG, TAG, "Camera.open() hook installed");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": failed to hook Camera.open(): " + t.getMessage());
+            xposed.log(Log.DEBUG, TAG, "failed to hook Camera.open(): " + t.getMessage());
         }
     }
 
@@ -489,46 +439,49 @@ public class VirtualCameraHook {
      * 当水平镜像开关启用时调用：
      * 通过包装 Camera.PreviewCallback / Camera.setPreviewCallbackWithBuffer 的回调，
      * 在软件层对 NV21 帧数据进行水平翻转。
-     * 注意：未使用 Camera.setParameters("mirror","true") HAL 级提示，以避免在支持该参数的
-     * OEM 设备上出现 HAL + 软件双重翻转相互抵消的问题。
      */
-    private void hookCamera1Mirror() {
+    private void hookCamera1Mirror(XposedInterface xposed) {
         // 软件层 NV21 水平翻转：包装预览回调
-        final XC_MethodHook callbackWrapHook = new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                Camera.PreviewCallback cb = (Camera.PreviewCallback) param.args[0];
-                if (cb == null || cb instanceof MirrorPreviewCallback) return;
-                try {
-                    Camera cam = (Camera) param.thisObject;
-                    Camera.Size size = cam.getParameters().getPreviewSize();
-                    param.args[0] = new MirrorPreviewCallback(cb, size.width, size.height);
-                    XposedBridge.log(TAG + ": preview callback wrapped for mirror ("
-                            + size.width + "x" + size.height + ")");
-                } catch (Throwable inner) {
-                    XposedBridge.log(TAG + ": failed to wrap preview callback: "
-                            + inner.getMessage());
-                }
+        XposedInterface.Hooker callbackWrapHook = chain -> {
+            Camera.PreviewCallback cb = (Camera.PreviewCallback) chain.getArg(0);
+            if (cb == null || cb instanceof MirrorPreviewCallback) return chain.proceed();
+            try {
+                Camera cam = (Camera) chain.getThisObject();
+                Camera.Size size = cam.getParameters().getPreviewSize();
+                Object[] args = chain.getArgs().toArray(new Object[0]);
+                args[0] = new MirrorPreviewCallback(cb, size.width, size.height);
+                xposed.log(Log.DEBUG, TAG, "preview callback wrapped for mirror ("
+                        + size.width + "x" + size.height + ")");
+                return chain.proceed(args);
+            } catch (Throwable inner) {
+                xposed.log(Log.DEBUG, TAG, "failed to wrap preview callback: "
+                        + inner.getMessage());
+                return chain.proceed();
             }
         };
 
         try {
-            XposedHelpers.findAndHookMethod(Camera.class, "setPreviewCallback",
-                    Camera.PreviewCallback.class, callbackWrapHook);
-            XposedBridge.log(TAG + ": Camera.setPreviewCallback mirror hook installed");
+            Method m = Camera.class.getDeclaredMethod("setPreviewCallback",
+                    Camera.PreviewCallback.class);
+            m.setAccessible(true);
+            xposed.hook(m).intercept(callbackWrapHook);
+            xposed.log(Log.DEBUG, TAG, "Camera.setPreviewCallback mirror hook installed");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": failed to hook Camera.setPreviewCallback for mirror: "
-                    + t.getMessage());
+            xposed.log(Log.DEBUG, TAG,
+                    "failed to hook Camera.setPreviewCallback for mirror: " + t.getMessage());
         }
 
         try {
-            XposedHelpers.findAndHookMethod(Camera.class, "setPreviewCallbackWithBuffer",
-                    Camera.PreviewCallback.class, callbackWrapHook);
-            XposedBridge.log(TAG + ": Camera.setPreviewCallbackWithBuffer mirror hook installed");
+            Method m = Camera.class.getDeclaredMethod("setPreviewCallbackWithBuffer",
+                    Camera.PreviewCallback.class);
+            m.setAccessible(true);
+            xposed.hook(m).intercept(callbackWrapHook);
+            xposed.log(Log.DEBUG, TAG,
+                    "Camera.setPreviewCallbackWithBuffer mirror hook installed");
         } catch (Throwable t) {
-            XposedBridge.log(TAG
-                    + ": failed to hook Camera.setPreviewCallbackWithBuffer for mirror: "
-                    + t.getMessage());
+            xposed.log(Log.DEBUG, TAG,
+                    "failed to hook Camera.setPreviewCallbackWithBuffer for mirror: "
+                            + t.getMessage());
         }
     }
 
@@ -600,42 +553,47 @@ public class VirtualCameraHook {
      * 通过包装 Camera.PreviewCallback / Camera.setPreviewCallbackWithBuffer 的回调，
      * 在软件层对 NV21 帧数据进行顺时针旋转90度。
      */
-    private void hookCamera1RotateCW90() {
-        final XC_MethodHook callbackWrapHook = new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                Camera.PreviewCallback cb = (Camera.PreviewCallback) param.args[0];
-                if (cb == null || cb instanceof RotateCW90PreviewCallback) return;
-                try {
-                    Camera cam = (Camera) param.thisObject;
-                    Camera.Size size = cam.getParameters().getPreviewSize();
-                    param.args[0] = new RotateCW90PreviewCallback(cb, size.width, size.height);
-                    XposedBridge.log(TAG + ": preview callback wrapped for rotateCW90 ("
-                            + size.width + "x" + size.height + ")");
-                } catch (Throwable inner) {
-                    XposedBridge.log(TAG + ": failed to wrap preview callback for rotateCW90: "
-                            + inner.getMessage());
-                }
+    private void hookCamera1RotateCW90(XposedInterface xposed) {
+        XposedInterface.Hooker callbackWrapHook = chain -> {
+            Camera.PreviewCallback cb = (Camera.PreviewCallback) chain.getArg(0);
+            if (cb == null || cb instanceof RotateCW90PreviewCallback) return chain.proceed();
+            try {
+                Camera cam = (Camera) chain.getThisObject();
+                Camera.Size size = cam.getParameters().getPreviewSize();
+                Object[] args = chain.getArgs().toArray(new Object[0]);
+                args[0] = new RotateCW90PreviewCallback(cb, size.width, size.height);
+                xposed.log(Log.DEBUG, TAG, "preview callback wrapped for rotateCW90 ("
+                        + size.width + "x" + size.height + ")");
+                return chain.proceed(args);
+            } catch (Throwable inner) {
+                xposed.log(Log.DEBUG, TAG,
+                        "failed to wrap preview callback for rotateCW90: " + inner.getMessage());
+                return chain.proceed();
             }
         };
 
         try {
-            XposedHelpers.findAndHookMethod(Camera.class, "setPreviewCallback",
-                    Camera.PreviewCallback.class, callbackWrapHook);
-            XposedBridge.log(TAG + ": Camera.setPreviewCallback rotateCW90 hook installed");
+            Method m = Camera.class.getDeclaredMethod("setPreviewCallback",
+                    Camera.PreviewCallback.class);
+            m.setAccessible(true);
+            xposed.hook(m).intercept(callbackWrapHook);
+            xposed.log(Log.DEBUG, TAG, "Camera.setPreviewCallback rotateCW90 hook installed");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": failed to hook Camera.setPreviewCallback for rotateCW90: "
-                    + t.getMessage());
+            xposed.log(Log.DEBUG, TAG,
+                    "failed to hook Camera.setPreviewCallback for rotateCW90: " + t.getMessage());
         }
 
         try {
-            XposedHelpers.findAndHookMethod(Camera.class, "setPreviewCallbackWithBuffer",
-                    Camera.PreviewCallback.class, callbackWrapHook);
-            XposedBridge.log(TAG + ": Camera.setPreviewCallbackWithBuffer rotateCW90 hook installed");
+            Method m = Camera.class.getDeclaredMethod("setPreviewCallbackWithBuffer",
+                    Camera.PreviewCallback.class);
+            m.setAccessible(true);
+            xposed.hook(m).intercept(callbackWrapHook);
+            xposed.log(Log.DEBUG, TAG,
+                    "Camera.setPreviewCallbackWithBuffer rotateCW90 hook installed");
         } catch (Throwable t) {
-            XposedBridge.log(TAG
-                    + ": failed to hook Camera.setPreviewCallbackWithBuffer for rotateCW90: "
-                    + t.getMessage());
+            xposed.log(Log.DEBUG, TAG,
+                    "failed to hook Camera.setPreviewCallbackWithBuffer for rotateCW90: "
+                            + t.getMessage());
         }
     }
 

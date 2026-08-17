@@ -1,16 +1,15 @@
 package com.uvcforce;
 
+import android.hardware.Camera;
+import android.hardware.Camera.CameraInfo;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CameraMetadata;
-import android.hardware.Camera;
-import android.hardware.Camera.CameraInfo;
+import android.util.Log;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XC_MethodReplacement;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
+import io.github.libxposed.api.XposedInterface;
 
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -19,320 +18,263 @@ import java.util.List;
  * 由 MainModule 统一调度，通过 apply() 而非 IXposedHookLoadPackage 接口触发。
  */
 public class Module {
+    private static final String TAG = "uvcforce";
+
     // Empty = global effect. Set to a package name like "com.example.ttjump" to restrict.
     private static final String TARGET_PACKAGE = "";
 
     /**
      * 在目标包加载时安装 Hook。
      *
+     * @param xposed      libxposed API 102 接口实例（由 MainModule 传入）
      * @param packageName 目标应用包名
      * @param classLoader 目标应用的 ClassLoader
      */
-    public void apply(String packageName, ClassLoader classLoader) {
+    public void apply(XposedInterface xposed, String packageName, ClassLoader classLoader) {
         if (TARGET_PACKAGE != null && TARGET_PACKAGE.length() > 0) {
             if (!TARGET_PACKAGE.equals(packageName)) {
                 return;
             }
         }
 
-        XposedBridge.log("uvcforce: loaded for " + packageName);
+        xposed.log(Log.DEBUG, TAG, "loaded for " + packageName);
 
         // Hook Camera2.getCameraIdList
         try {
-            XposedHelpers.findAndHookMethod(
-                "android.hardware.camera2.CameraManager",
-                classLoader,
-                "getCameraIdList",
-                new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        try {
-                            String[] ids = (String[]) param.getResult();
-                            if (ids == null || ids.length <= 1) return;
+            Method getCameraIdList = Class.forName(
+                    "android.hardware.camera2.CameraManager", false, classLoader)
+                    .getDeclaredMethod("getCameraIdList");
+            getCameraIdList.setAccessible(true);
+            xposed.hook(getCameraIdList).intercept(chain -> {
+                String[] ids = (String[]) chain.proceed();
+                if (ids == null || ids.length <= 1) return ids;
 
-                            Object thisObj = param.thisObject;
-                            CameraManager mgr = null;
-                            if (thisObj instanceof CameraManager) {
-                                mgr = (CameraManager) thisObj;
-                            }
+                CameraManager mgr = (CameraManager) chain.getThisObject();
+                List<String> external = new ArrayList<>();
+                List<String> others = new ArrayList<>();
 
-                            List<String> external = new ArrayList<>();
-                            List<String> others = new ArrayList<>();
-
-                            for (String id : ids) {
-                                boolean isExternal = false;
-                                if (mgr != null) {
-                                    try {
-                                        CameraCharacteristics ch = mgr.getCameraCharacteristics(id);
-                                        Integer lens = ch.get(CameraCharacteristics.LENS_FACING);
-                                        if (lens != null && lens == CameraCharacteristics.LENS_FACING_EXTERNAL) {
-                                            isExternal = true;
-                                        }
-                                    } catch (Throwable t) {
-                                        // ignore per-camera failures
-                                    }
-                                }
-                                if (isExternal) external.add(id);
-                                else others.add(id);
-                            }
-
-                            if (!external.isEmpty()) {
-                                List<String> reordered = new ArrayList<>();
-                                reordered.addAll(external);
-                                reordered.addAll(others);
-                                param.setResult(reordered.toArray(new String[0]));
-                                XposedBridge.log("uvcforce: reordered Camera2 list, external first: " + reordered.toString());
-                            }
-                        } catch (Throwable t) {
-                            XposedBridge.log("uvcforce: Camera2 hook error: " + t.getMessage());
+                for (String id : ids) {
+                    boolean isExternal = false;
+                    try {
+                        CameraCharacteristics ch = mgr.getCameraCharacteristics(id);
+                        Integer lens = ch.get(CameraCharacteristics.LENS_FACING);
+                        if (lens != null && lens == CameraCharacteristics.LENS_FACING_EXTERNAL) {
+                            isExternal = true;
                         }
+                    } catch (Throwable t) {
+                        // ignore per-camera failures
                     }
+                    if (isExternal) external.add(id);
+                    else others.add(id);
                 }
-            );
+
+                if (!external.isEmpty()) {
+                    List<String> reordered = new ArrayList<>();
+                    reordered.addAll(external);
+                    reordered.addAll(others);
+                    xposed.log(Log.DEBUG, TAG, "reordered Camera2 list, external first: " + reordered);
+                    return reordered.toArray(new String[0]);
+                }
+                return ids;
+            });
         } catch (Throwable t) {
-            XposedBridge.log("uvcforce: failed to hook CameraManager.getCameraIdList: " + t.getMessage());
+            xposed.log(Log.DEBUG, TAG, "failed to hook CameraManager.getCameraIdList: " + t.getMessage());
         }
 
         // Hook legacy Camera API open() and open(int)
         try {
             Class<?> cameraClass = Camera.class;
 
-            XposedHelpers.findAndHookMethod(
-                cameraClass,
-                "open",
-                int.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                        try {
-                            int requested = (Integer) param.args[0];
-                            int externalId = findExternalCameraOldAPI();
-                            if (externalId >= 0 && externalId != requested) {
-                                param.args[0] = externalId;
-                                XposedBridge.log("uvcforce: remapped Camera.open(" + requested + ") -> open(" + externalId + ")");
-                            }
-                        } catch (Throwable t) {
-                            XposedBridge.log("uvcforce: open(int) hook error: " + t.getMessage());
-                        }
-                    }
+            Method openInt = cameraClass.getDeclaredMethod("open", int.class);
+            openInt.setAccessible(true);
+            xposed.hook(openInt).intercept(chain -> {
+                int requested = (Integer) chain.getArg(0);
+                int externalId = findExternalCameraOldAPI();
+                if (externalId >= 0 && externalId != requested) {
+                    xposed.log(Log.DEBUG, TAG, "remapped Camera.open(" + requested + ") -> open(" + externalId + ")");
+                    return chain.proceed(new Object[]{externalId});
                 }
-            );
+                return chain.proceed();
+            });
 
-            XposedHelpers.findAndHookMethod(
-                cameraClass,
-                "open",
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                        try {
-                            int externalId = findExternalCameraOldAPI();
-                            if (externalId >= 0) {
-                                Camera cam = Camera.open(externalId);
-                                param.setResult(cam);
-                                XposedBridge.log("uvcforce: remapped Camera.open() -> open(" + externalId + ")");
-                            }
-                        } catch (Throwable t) {
-                            XposedBridge.log("uvcforce: open() hook error: " + t.getMessage());
-                        }
-                    }
+            Method openNoArg = cameraClass.getDeclaredMethod("open");
+            openNoArg.setAccessible(true);
+            xposed.hook(openNoArg).intercept(chain -> {
+                int externalId = findExternalCameraOldAPI();
+                if (externalId >= 0) {
+                    Camera cam = Camera.open(externalId);
+                    xposed.log(Log.DEBUG, TAG, "remapped Camera.open() -> open(" + externalId + ")");
+                    return cam;
                 }
-            );
+                return chain.proceed();
+            });
 
         } catch (Throwable t) {
-            XposedBridge.log("uvcforce: failed to hook old Camera API: " + t.getMessage());
+            xposed.log(Log.DEBUG, TAG, "failed to hook old Camera API: " + t.getMessage());
         }
 
         // Hook ByteRTC Camera1Enumerator to clear static cache and force re-enumeration
         try {
-            final Class<?> enumClass = XposedHelpers.findClass(
-                "com.ss.bytertc.base.media.camera.Camera1Enumerator",
-                classLoader
-            );
-
-            XposedHelpers.findAndHookMethod(
-                enumClass,
-                "getSupportedFormats",
-                int.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                        Integer camIndex = (Integer) param.args[0];
-                        if (camIndex == null) return;
-                        XposedBridge.log("uvcforce: Camera1Enumerator.getSupportedFormats called for index: " + camIndex);
-                        try {
-                            XposedHelpers.setStaticObjectField(enumClass, "cachedSupportedFormats", null);
-                            XposedBridge.log("uvcforce: cleared cachedSupportedFormats");
-                        } catch (Throwable t) {
-                            XposedBridge.log("uvcforce: failed to clear cachedSupportedFormats: " + t);
-                        }
-                    }
-
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        @SuppressWarnings("unchecked")
-                        java.util.List<?> res = (java.util.List<?>) param.getResult();
-                        XposedBridge.log("uvcforce: Camera1Enumerator.getSupportedFormats returned size: " + (res == null ? "null" : res.size()));
-                    }
+            final Class<?> enumClass = Class.forName(
+                    "com.ss.bytertc.base.media.camera.Camera1Enumerator", false, classLoader);
+            Method getSupportedFormats = enumClass.getDeclaredMethod("getSupportedFormats", int.class);
+            getSupportedFormats.setAccessible(true);
+            xposed.hook(getSupportedFormats).intercept(chain -> {
+                Integer camIndex = (Integer) chain.getArg(0);
+                xposed.log(Log.DEBUG, TAG, "Camera1Enumerator.getSupportedFormats called for index: " + camIndex);
+                try {
+                    java.lang.reflect.Field f = enumClass.getDeclaredField("cachedSupportedFormats");
+                    f.setAccessible(true);
+                    f.set(null, null);
+                    xposed.log(Log.DEBUG, TAG, "cleared cachedSupportedFormats");
+                } catch (Throwable t) {
+                    xposed.log(Log.DEBUG, TAG, "failed to clear cachedSupportedFormats: " + t);
                 }
-            );
+                @SuppressWarnings("unchecked")
+                List<?> res = (List<?>) chain.proceed();
+                xposed.log(Log.DEBUG, TAG, "Camera1Enumerator.getSupportedFormats returned size: "
+                        + (res == null ? "null" : res.size()));
+                return res;
+            });
+        } catch (ClassNotFoundException e) {
+            // not a ByteRTC app; skip silently
         } catch (Throwable t) {
-            XposedBridge.log("uvcforce: Camera1Enumerator not found or hook failed: " + t);
+            xposed.log(Log.DEBUG, TAG, "Camera1Enumerator not found or hook failed: " + t);
         }
 
         // Hook Camera.Parameters.getSupportedPreviewFpsRange to return dummy data if null/empty
         try {
-            XposedHelpers.findAndHookMethod(
-                "android.hardware.Camera$Parameters",
-                classLoader,
-                "getSupportedPreviewFpsRange",
-                new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        @SuppressWarnings("unchecked")
-                        List<int[]> result = (List<int[]>) param.getResult();
-                        if (result == null || result.isEmpty()) {
-                            List<int[]> fake = new ArrayList<>();
-                            fake.add(new int[]{15000, 30000});
-                            param.setResult(fake);
-                            XposedBridge.log("uvcforce: faked getSupportedPreviewFpsRange");
-                        }
-                    }
+            Method m = Class.forName("android.hardware.Camera$Parameters", false, classLoader)
+                    .getDeclaredMethod("getSupportedPreviewFpsRange");
+            m.setAccessible(true);
+            xposed.hook(m).intercept(chain -> {
+                @SuppressWarnings("unchecked")
+                List<int[]> result = (List<int[]>) chain.proceed();
+                if (result == null || result.isEmpty()) {
+                    List<int[]> fake = new ArrayList<>();
+                    fake.add(new int[]{15000, 30000});
+                    xposed.log(Log.DEBUG, TAG, "faked getSupportedPreviewFpsRange");
+                    return fake;
                 }
-            );
+                return result;
+            });
         } catch (Throwable t) {
-            XposedBridge.log("uvcforce: failed to hook getSupportedPreviewFpsRange: " + t.getMessage());
+            xposed.log(Log.DEBUG, TAG, "failed to hook getSupportedPreviewFpsRange: " + t.getMessage());
         }
 
         // Hook Camera.Parameters.getSupportedPictureSizes to fallback to preview sizes if null/empty
         try {
-            XposedHelpers.findAndHookMethod(
-                "android.hardware.Camera$Parameters",
-                classLoader,
-                "getSupportedPictureSizes",
-                new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        @SuppressWarnings("unchecked")
-                        List<?> result = (List<?>) param.getResult();
-                        if (result == null || result.isEmpty()) {
-                            Camera.Parameters params = (Camera.Parameters) param.thisObject;
-                            List<Camera.Size> previewSizes = params.getSupportedPreviewSizes();
-                            if (previewSizes != null && !previewSizes.isEmpty()) {
-                                param.setResult(previewSizes);
-                                XposedBridge.log("uvcforce: faked getSupportedPictureSizes with preview sizes");
-                            } else {
-                                XposedBridge.log("uvcforce: getSupportedPictureSizes: no preview sizes available either");
-                            }
-                        }
+            Method m = Class.forName("android.hardware.Camera$Parameters", false, classLoader)
+                    .getDeclaredMethod("getSupportedPictureSizes");
+            m.setAccessible(true);
+            xposed.hook(m).intercept(chain -> {
+                @SuppressWarnings("unchecked")
+                List<?> result = (List<?>) chain.proceed();
+                if (result == null || result.isEmpty()) {
+                    Camera.Parameters params = (Camera.Parameters) chain.getThisObject();
+                    List<Camera.Size> previewSizes = params.getSupportedPreviewSizes();
+                    if (previewSizes != null && !previewSizes.isEmpty()) {
+                        xposed.log(Log.DEBUG, TAG, "faked getSupportedPictureSizes with preview sizes");
+                        return previewSizes;
+                    } else {
+                        xposed.log(Log.DEBUG, TAG, "getSupportedPictureSizes: no preview sizes available either");
                     }
                 }
-            );
+                return result;
+            });
         } catch (Throwable t) {
-            XposedBridge.log("uvcforce: failed to hook getSupportedPictureSizes: " + t.getMessage());
+            xposed.log(Log.DEBUG, TAG, "failed to hook getSupportedPictureSizes: " + t.getMessage());
         }
 
         // Hook Camera.setParameters to swallow exceptions from UVC cameras
         try {
-            XposedHelpers.findAndHookMethod(
-                Camera.class,
-                "setParameters",
-                Camera.Parameters.class,
-                new XC_MethodReplacement() {
-                    @Override
-                    protected Object replaceHookedMethod(MethodHookParam param) throws Throwable {
-                        try {
-                            XposedBridge.invokeOriginalMethod(param.method, param.thisObject, param.args);
-                        } catch (Throwable t) {
-                            XposedBridge.log("uvcforce: ignored Camera.setParameters exception: " + t.getMessage());
-                        }
-                        return null;
-                    }
+            Method m = Camera.class.getDeclaredMethod("setParameters", Camera.Parameters.class);
+            m.setAccessible(true);
+            xposed.hook(m).intercept(chain -> {
+                try {
+                    chain.proceed();
+                } catch (Throwable t) {
+                    xposed.log(Log.DEBUG, TAG, "ignored Camera.setParameters exception: " + t.getMessage());
                 }
-            );
+                return null;
+            });
         } catch (Throwable t) {
-            XposedBridge.log("uvcforce: failed to hook Camera.setParameters: " + t.getMessage());
+            xposed.log(Log.DEBUG, TAG, "failed to hook Camera.setParameters: " + t.getMessage());
         }
 
         // Hook CameraManager.openCamera (all overloads) to force external camera ID
         try {
             Class<?> cameraManagerClass = Class.forName("android.hardware.camera2.CameraManager");
-            for (java.lang.reflect.Method method : cameraManagerClass.getDeclaredMethods()) {
+            for (Method method : cameraManagerClass.getDeclaredMethods()) {
                 if ("openCamera".equals(method.getName())) {
-                    XposedBridge.hookMethod(method, new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                            try {
-                                String requestedId = (String) param.args[0];
-                                CameraManager mgr = (CameraManager) param.thisObject;
-                                String externalId = null;
-                                for (String id : mgr.getCameraIdList()) {
-                                    CameraCharacteristics ch = mgr.getCameraCharacteristics(id);
-                                    Integer lens = ch.get(CameraCharacteristics.LENS_FACING);
-                                    if (lens != null && lens == CameraCharacteristics.LENS_FACING_EXTERNAL) {
-                                        externalId = id;
-                                        break;
-                                    }
+                    method.setAccessible(true);
+                    xposed.hook(method).intercept(chain -> {
+                        String requestedId = (String) chain.getArg(0);
+                        CameraManager mgr = (CameraManager) chain.getThisObject();
+                        String externalId = null;
+                        try {
+                            for (String id : mgr.getCameraIdList()) {
+                                CameraCharacteristics ch = mgr.getCameraCharacteristics(id);
+                                Integer lens = ch.get(CameraCharacteristics.LENS_FACING);
+                                if (lens != null && lens == CameraCharacteristics.LENS_FACING_EXTERNAL) {
+                                    externalId = id;
+                                    break;
                                 }
-                                if (externalId != null && !externalId.equals(requestedId)) {
-                                    param.args[0] = externalId;
-                                    XposedBridge.log("uvcforce: remapped openCamera(" + requestedId + ") -> openCamera(" + externalId + ")");
-                                }
-                            } catch (Throwable t) {
-                                XposedBridge.log("uvcforce: openCamera hook error: " + t.getMessage());
                             }
+                        } catch (Throwable t) {
+                            xposed.log(Log.DEBUG, TAG, "openCamera hook error: " + t.getMessage());
                         }
+                        if (externalId != null && !externalId.equals(requestedId)) {
+                            xposed.log(Log.DEBUG, TAG, "remapped openCamera(" + requestedId
+                                    + ") -> openCamera(" + externalId + ")");
+                            Object[] args = chain.getArgs().toArray(new Object[0]);
+                            args[0] = externalId;
+                            return chain.proceed(args);
+                        }
+                        return chain.proceed();
                     });
                 }
             }
         } catch (Throwable t) {
-            XposedBridge.log("uvcforce: failed to hook CameraManager.openCamera: " + t.getMessage());
+            xposed.log(Log.DEBUG, TAG, "failed to hook CameraManager.openCamera: " + t.getMessage());
         }
 
         // Hook Camera1 getCameraInfo to spoof external camera as front-facing
         try {
-            XposedHelpers.findAndHookMethod(
-                Camera.class,
-                "getCameraInfo",
-                int.class,
-                Camera.CameraInfo.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        Camera.CameraInfo info = (Camera.CameraInfo) param.args[1];
-                        if (info.facing == 2 /* CAMERA_FACING_EXTERNAL */) {
-                            info.facing = Camera.CameraInfo.CAMERA_FACING_FRONT;
-                            XposedBridge.log("uvcforce: getCameraInfo spoofed external camera as FRONT");
-                        }
-                    }
+            Method m = Camera.class.getDeclaredMethod("getCameraInfo", int.class, Camera.CameraInfo.class);
+            m.setAccessible(true);
+            xposed.hook(m).intercept(chain -> {
+                chain.proceed();
+                Camera.CameraInfo info = (Camera.CameraInfo) chain.getArg(1);
+                if (info.facing == 2 /* CAMERA_FACING_EXTERNAL */) {
+                    info.facing = Camera.CameraInfo.CAMERA_FACING_FRONT;
+                    xposed.log(Log.DEBUG, TAG, "getCameraInfo spoofed external camera as FRONT");
                 }
-            );
+                return null;
+            });
         } catch (Throwable t) {
-            XposedBridge.log("uvcforce: failed to hook Camera.getCameraInfo: " + t.getMessage());
+            xposed.log(Log.DEBUG, TAG, "failed to hook Camera.getCameraInfo: " + t.getMessage());
         }
 
         // Hook Camera2 CameraCharacteristics.get to spoof external LENS_FACING as front
         try {
-            XposedHelpers.findAndHookMethod(
-                "android.hardware.camera2.CameraCharacteristics",
-                classLoader,
-                "get",
-                CameraCharacteristics.Key.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        CameraCharacteristics.Key<?> key = (CameraCharacteristics.Key<?>) param.args[0];
-                        if (CameraCharacteristics.LENS_FACING.equals(key)) {
-                            Object result = param.getResult();
-                            if (result instanceof Integer && (Integer) result == CameraMetadata.LENS_FACING_EXTERNAL) {
-                                param.setResult(CameraMetadata.LENS_FACING_FRONT);
-                                XposedBridge.log("uvcforce: CameraCharacteristics.get(LENS_FACING) spoofed external as FRONT");
-                            }
-                        }
-                    }
+            Method m = Class.forName("android.hardware.camera2.CameraCharacteristics", false, classLoader)
+                    .getDeclaredMethod("get", CameraCharacteristics.Key.class);
+            m.setAccessible(true);
+            xposed.hook(m).intercept(chain -> {
+                Object result = chain.proceed();
+                CameraCharacteristics.Key<?> key = (CameraCharacteristics.Key<?>) chain.getArg(0);
+                if (CameraCharacteristics.LENS_FACING.equals(key)
+                        && result instanceof Integer
+                        && (Integer) result == CameraMetadata.LENS_FACING_EXTERNAL) {
+                    xposed.log(Log.DEBUG, TAG,
+                            "CameraCharacteristics.get(LENS_FACING) spoofed external as FRONT");
+                    return CameraMetadata.LENS_FACING_FRONT;
                 }
-            );
+                return result;
+            });
         } catch (Throwable t) {
-            XposedBridge.log("uvcforce: failed to hook CameraCharacteristics.get: " + t.getMessage());
+            xposed.log(Log.DEBUG, TAG, "failed to hook CameraCharacteristics.get: " + t.getMessage());
         }
     }
 
@@ -347,7 +289,7 @@ public class Module {
                 }
             }
         } catch (Throwable t) {
-            XposedBridge.log("uvcforce: findExternalCameraOldAPI error: " + t.getMessage());
+            // ignore
         }
         return -1;
     }
