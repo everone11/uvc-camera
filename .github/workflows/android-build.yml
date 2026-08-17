@@ -53,7 +53,7 @@ jobs:
           
       - name: Install Android platforms and build-tools
         run: |
-          sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.2"
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
           sdkmanager "platforms;android-29" "build-tools;29.0.3"
           
       - name: Ensure gradlew is executable
