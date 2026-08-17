@@ -666,7 +666,7 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
                 // 对UV坐标做同样的顺时针旋转，保持VU对完整
                 int outCol = col / 2;            // 输出UV列（UV水平降采样）
                 int outRow = uvHeight - 1 - row; // 输出UV行
-                int outUVOffset = frameSize + outCol * uvHeight * 2 + outRow * 2;
+                int outUVOffset = frameSize + outCol * height * 2 + outRow * 2;
                 if (outUVOffset + 1 < output.length) {
                     output[outUVOffset]     = vByte;
                     output[outUVOffset + 1] = uByte;
