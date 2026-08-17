@@ -17,6 +17,7 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.ListView;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -34,6 +35,7 @@ public class MainActivity extends Activity {
 
     private TextView tvCurrentTarget;
     private Button btnClear;
+    private Switch switchMirror;
     private EditText etSearch;
     private ListView listView;
     private View loadingOverlay;
@@ -52,6 +54,7 @@ public class MainActivity extends Activity {
 
         tvCurrentTarget = findViewById(R.id.tv_current_target);
         btnClear = findViewById(R.id.btn_clear);
+        switchMirror = findViewById(R.id.switch_mirror);
         etSearch = findViewById(R.id.et_search);
         listView = findViewById(R.id.list_view);
         loadingOverlay = findViewById(R.id.loading_overlay);
@@ -66,6 +69,14 @@ public class MainActivity extends Activity {
                 updateCurrentTargetView();
                 adapter.notifyDataSetChanged();
                 Toast.makeText(MainActivity.this, R.string.hook_all_apps, Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        switchMirror.setChecked(PrefManager.isMirrorHorizontal(this));
+        switchMirror.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(android.widget.CompoundButton buttonView, boolean isChecked) {
+                PrefManager.setMirrorHorizontal(MainActivity.this, isChecked);
             }
         });
 
@@ -97,6 +108,7 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         updateCurrentTargetView();
+        switchMirror.setChecked(PrefManager.isMirrorHorizontal(this));
         adapter.notifyDataSetChanged();
     }
 

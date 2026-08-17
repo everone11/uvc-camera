@@ -66,6 +66,9 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
      */
     private static volatile Method cachedOpenIntMethod = null;
 
+    /** 水平镜像开关：由 handleLoadPackage 从偏好设置读取。 */
+    private static volatile boolean mirrorEnabled = false;
+
     @Override
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
         XSharedPreferences prefs = new XSharedPreferences(MODULE_PACKAGE, PrefManager.PREF_NAME);
@@ -79,6 +82,9 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
         }
 
         XposedBridge.log(TAG + ": loaded for " + lpparam.packageName);
+
+        mirrorEnabled = prefs.getBoolean(PrefManager.KEY_MIRROR_HORIZONTAL, false);
+        XposedBridge.log(TAG + ": mirrorEnabled=" + mirrorEnabled);
 
         // 在安装 Hook 之前发现 Camera1 USB 摄像头索引，避免 Hook 自调用
         discoverCamera1UvcIndex();
@@ -314,6 +320,9 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
         hookGetCameraInfo();
         hookCameraOpenInt();
         hookCameraOpenNoArg();
+        if (mirrorEnabled) {
+            hookCamera1Mirror();
+        }
     }
 
     /**
@@ -422,6 +431,137 @@ public class VirtualCameraHook implements IXposedHookLoadPackage {
             XposedBridge.log(TAG + ": Camera.open() hook installed");
         } catch (Throwable t) {
             XposedBridge.log(TAG + ": failed to hook Camera.open(): " + t.getMessage());
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // 水平镜像 hooks（Camera1）
+    // -------------------------------------------------------------------------
+
+    /**
+     * 当水平镜像开关启用时调用：
+     * 1. 通过 Camera.setParameters() 向 HAL 传递 "mirror"="true" 参数（OEM 设备支持）。
+     * 2. 通过包装 Camera.PreviewCallback / Camera.setPreviewCallbackWithBuffer 的回调，
+     *    在软件层对 NV21 帧数据进行水平翻转，适用于不支持 HAL 级别镜像的设备。
+     */
+    private void hookCamera1Mirror() {
+        // HAL 级镜像参数（在支持的 OEM 设备上优先生效）
+        try {
+            XposedHelpers.findAndHookMethod(
+                Camera.class,
+                "setParameters",
+                Camera.Parameters.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        Camera.Parameters p = (Camera.Parameters) param.args[0];
+                        if (p != null) {
+                            p.set("mirror", "true");
+                        }
+                    }
+                }
+            );
+            XposedBridge.log(TAG + ": Camera.setParameters mirror hook installed");
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + ": failed to hook Camera.setParameters for mirror: "
+                    + t.getMessage());
+        }
+
+        // 软件层 NV21 水平翻转：包装预览回调
+        final XC_MethodHook callbackWrapHook = new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                Camera.PreviewCallback cb = (Camera.PreviewCallback) param.args[0];
+                if (cb == null || cb instanceof MirrorPreviewCallback) return;
+                try {
+                    Camera cam = (Camera) param.thisObject;
+                    Camera.Size size = cam.getParameters().getPreviewSize();
+                    param.args[0] = new MirrorPreviewCallback(cb, size.width, size.height);
+                    XposedBridge.log(TAG + ": preview callback wrapped for mirror ("
+                            + size.width + "x" + size.height + ")");
+                } catch (Throwable inner) {
+                    XposedBridge.log(TAG + ": failed to wrap preview callback: "
+                            + inner.getMessage());
+                }
+            }
+        };
+
+        try {
+            XposedHelpers.findAndHookMethod(Camera.class, "setPreviewCallback",
+                    Camera.PreviewCallback.class, callbackWrapHook);
+            XposedBridge.log(TAG + ": Camera.setPreviewCallback mirror hook installed");
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + ": failed to hook Camera.setPreviewCallback for mirror: "
+                    + t.getMessage());
+        }
+
+        try {
+            XposedHelpers.findAndHookMethod(Camera.class, "setPreviewCallbackWithBuffer",
+                    Camera.PreviewCallback.class, callbackWrapHook);
+            XposedBridge.log(TAG + ": Camera.setPreviewCallbackWithBuffer mirror hook installed");
+        } catch (Throwable t) {
+            XposedBridge.log(TAG
+                    + ": failed to hook Camera.setPreviewCallbackWithBuffer for mirror: "
+                    + t.getMessage());
+        }
+    }
+
+    /**
+     * 对 NV21/NV12 格式帧数据执行原地水平翻转。
+     * Y 平面：逐行反转字节顺序。
+     * UV 平面（交错 VU 对）：逐行以 2 字节为单位反转，保持色度采样对的完整性。
+     */
+    private static void flipHorizontalNV21InPlace(byte[] data, int width, int height) {
+        // 翻转 Y 平面（每行独立翻转）
+        for (int row = 0; row < height; row++) {
+            int left  = row * width;
+            int right = left + width - 1;
+            while (left < right) {
+                byte tmp   = data[left];
+                data[left]  = data[right];
+                data[right] = tmp;
+                left++;
+                right--;
+            }
+        }
+        // 翻转 UV 平面（以 2 字节 VU 对为单位翻转，保持色度采样对不拆散）
+        int uvStart = width * height;
+        for (int row = 0; row < height / 2; row++) {
+            int left  = uvStart + row * width;
+            int right = left + width - 2; // 最后一个完整 VU 对的起始位置
+            while (left < right) {
+                byte b0 = data[left];
+                byte b1 = data[left  + 1];
+                data[left]      = data[right];
+                data[left  + 1] = data[right + 1];
+                data[right]     = b0;
+                data[right + 1] = b1;
+                left  += 2;
+                right -= 2;
+            }
+        }
+    }
+
+    /**
+     * Camera1 预览回调代理：在调用原始回调前，对 NV21 帧数据进行水平翻转。
+     */
+    private static final class MirrorPreviewCallback implements Camera.PreviewCallback {
+        private final Camera.PreviewCallback delegate;
+        private final int width;
+        private final int height;
+
+        MirrorPreviewCallback(Camera.PreviewCallback delegate, int width, int height) {
+            this.delegate = delegate;
+            this.width    = width;
+            this.height   = height;
+        }
+
+        @Override
+        public void onPreviewFrame(byte[] data, Camera camera) {
+            if (data != null && data.length >= width * height * 3 / 2) {
+                flipHorizontalNV21InPlace(data, width, height);
+            }
+            delegate.onPreviewFrame(data, camera);
         }
     }
 }

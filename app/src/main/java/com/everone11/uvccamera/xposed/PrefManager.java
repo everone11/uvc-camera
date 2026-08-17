@@ -15,6 +15,9 @@ public class PrefManager {
     public static final String KEY_SESSION1_CLASS   = "session1_class";
     public static final String KEY_SESSION2_CLASS   = "session2_class";
 
+    // Key for horizontal mirror toggle.
+    public static final String KEY_MIRROR_HORIZONTAL = "mirror_horizontal";
+
     // Default ByteRTC class names (unobfuscated SDK).
     public static final String DEFAULT_ENUMERATOR_CLASS =
             "com.ss.bytertc.base.media.camera.Camera1Enumerator";
@@ -33,5 +36,17 @@ public class PrefManager {
     public static String getTargetPackage(Context context) {
         SharedPreferences prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
         return prefs.getString(KEY_TARGET_PACKAGE, "");
+    }
+
+    /** 保存水平镜像开关状态。 */
+    public static void setMirrorHorizontal(Context context, boolean enabled) {
+        SharedPreferences prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        prefs.edit().putBoolean(KEY_MIRROR_HORIZONTAL, enabled).apply();
+    }
+
+    /** 读取水平镜像开关状态，默认关闭。 */
+    public static boolean isMirrorHorizontal(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        return prefs.getBoolean(KEY_MIRROR_HORIZONTAL, false);
     }
 }
