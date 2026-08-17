@@ -2,11 +2,12 @@ package com.everone11.uvccamera.xposed;
 
 import android.content.SharedPreferences;
 import android.hardware.Camera;
+import android.util.Log;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
+import io.github.libxposed.api.XposedInterface;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -55,11 +56,12 @@ public class ByteRtcCameraHook {
     /**
      * 在目标包加载时安装 Hook。
      *
+     * @param xposed       libxposed API 102 接口实例（由 MainModule 传入）
      * @param packageName  目标应用包名
      * @param classLoader  目标应用的 ClassLoader
-     * @param prefs        模块 SharedPreferences（由 MainModule 通过 getSharedPreferences() 提供）
+     * @param prefs        模块 SharedPreferences（由 MainModule 通过 getRemotePreferences() 提供）
      */
-    public void apply(String packageName, ClassLoader classLoader, SharedPreferences prefs) {
+    public void apply(XposedInterface xposed, String packageName, ClassLoader classLoader, SharedPreferences prefs) {
         String targetPkg = prefs.getString(PrefManager.KEY_TARGET_PACKAGE, "");
 
         if (targetPkg != null && !targetPkg.isEmpty()) {
@@ -68,38 +70,34 @@ public class ByteRtcCameraHook {
             }
         }
 
-        XposedBridge.log(TAG + ": loaded for " + packageName);
+        xposed.log(Log.DEBUG, TAG, "loaded for " + packageName);
 
-        hookGetNumberOfCameras();
-        hookCamera1Enumerator(classLoader, prefs);
-        hookCamera1Session(classLoader, prefs);
-        hookCamera2Session(classLoader, prefs);
+        hookGetNumberOfCameras(xposed);
+        hookCamera1Enumerator(xposed, classLoader, prefs);
+        hookCamera1Session(xposed, classLoader, prefs);
+        hookCamera2Session(xposed, classLoader, prefs);
     }
 
     /**
      * Hook Camera.getNumberOfCameras() to return at least 1 on TV devices
      * that report 0 cameras, so Camera1Enumerator can enumerate UVC cameras.
      */
-    private void hookGetNumberOfCameras() {
+    private void hookGetNumberOfCameras(XposedInterface xposed) {
         try {
-            XposedHelpers.findAndHookMethod(
-                Camera.class,
-                "getNumberOfCameras",
-                new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        int count = (int) param.getResult();
-                        if (count == 0) {
-                            param.setResult(1);
-                            XposedBridge.log(TAG + ": Camera.getNumberOfCameras() was 0,"
-                                    + " overriding to 1 for UVC camera support");
-                        }
-                    }
+            Method m = Camera.class.getDeclaredMethod("getNumberOfCameras");
+            m.setAccessible(true);
+            xposed.hook(m).intercept(chain -> {
+                int count = (int) chain.proceed();
+                if (count == 0) {
+                    xposed.log(Log.DEBUG, TAG, "Camera.getNumberOfCameras() was 0,"
+                            + " overriding to 1 for UVC camera support");
+                    return 1;
                 }
-            );
-            XposedBridge.log(TAG + ": Camera.getNumberOfCameras hook installed");
+                return count;
+            });
+            xposed.log(Log.DEBUG, TAG, "Camera.getNumberOfCameras hook installed");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": failed to hook Camera.getNumberOfCameras: " + t.getMessage());
+            xposed.log(Log.DEBUG, TAG, "failed to hook Camera.getNumberOfCameras: " + t.getMessage());
         }
     }
 
@@ -108,82 +106,70 @@ public class ByteRtcCameraHook {
      * - getDeviceNames(): return at least ["0"] to ensure the UVC camera is discovered.
      * - getSupportedFormats(int): return UVC-compatible fallback formats when the result is empty.
      */
-    private void hookCamera1Enumerator(ClassLoader classLoader, SharedPreferences prefs) {
+    private void hookCamera1Enumerator(XposedInterface xposed, ClassLoader classLoader, SharedPreferences prefs) {
         String className = prefs.getString(
                 PrefManager.KEY_ENUMERATOR_CLASS, PrefManager.DEFAULT_ENUMERATOR_CLASS);
         Class<?> enumClass;
         try {
-            enumClass = XposedHelpers.findClass(className, classLoader);
-        } catch (XposedHelpers.ClassNotFoundError e) {
+            enumClass = Class.forName(className, false, classLoader);
+        } catch (ClassNotFoundException e) {
             // Expected when this app does not include the ByteRTC SDK; fail silently.
             return;
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": failed to find Camera1Enumerator class: " + t.getMessage());
+            xposed.log(Log.DEBUG, TAG, "failed to find Camera1Enumerator class: " + t.getMessage());
             return;
         }
 
         // Hook getDeviceNames()
         try {
-            XposedHelpers.findAndHookMethod(
-                enumClass,
-                "getDeviceNames",
-                new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        String[] names = (String[]) param.getResult();
-                        if (names == null || names.length == 0) {
-                            // Return ["0"] so Camera1Enumerator can open camera at index 0
-                            param.setResult(new String[]{"0"});
-                            XposedBridge.log(TAG + ": Camera1Enumerator.getDeviceNames() was empty,"
-                                    + " overriding to [\"0\"] for UVC camera");
-                        } else {
-                            XposedBridge.log(TAG + ": Camera1Enumerator.getDeviceNames() returned: "
-                                    + Arrays.toString(names));
-                        }
-                    }
+            Method getDeviceNames = enumClass.getDeclaredMethod("getDeviceNames");
+            getDeviceNames.setAccessible(true);
+            xposed.hook(getDeviceNames).intercept(chain -> {
+                String[] names = (String[]) chain.proceed();
+                if (names == null || names.length == 0) {
+                    // Return ["0"] so Camera1Enumerator can open camera at index 0
+                    xposed.log(Log.DEBUG, TAG, "Camera1Enumerator.getDeviceNames() was empty,"
+                            + " overriding to [\"0\"] for UVC camera");
+                    return new String[]{"0"};
+                } else {
+                    xposed.log(Log.DEBUG, TAG, "Camera1Enumerator.getDeviceNames() returned: "
+                            + Arrays.toString(names));
+                    return names;
                 }
-            );
-            XposedBridge.log(TAG + ": Camera1Enumerator.getDeviceNames hook installed");
+            });
+            xposed.log(Log.DEBUG, TAG, "Camera1Enumerator.getDeviceNames hook installed");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": failed to hook Camera1Enumerator.getDeviceNames: "
+            xposed.log(Log.DEBUG, TAG, "failed to hook Camera1Enumerator.getDeviceNames: "
                     + t.getMessage());
         }
 
         // Hook getSupportedFormats(int)
-        final Class<?> finalEnumClass = enumClass;
         try {
-            XposedHelpers.findAndHookMethod(
-                finalEnumClass,
-                "getSupportedFormats",
-                int.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        @SuppressWarnings("unchecked")
-                        List<?> res = (List<?>) param.getResult();
-                        if (res == null || res.isEmpty()) {
-                            List<Object> fallback =
-                                    buildUvcCaptureFormats(param.method.getDeclaringClass()
-                                            .getClassLoader());
-                            if (!fallback.isEmpty()) {
-                                param.setResult(fallback);
-                                XposedBridge.log(TAG + ": Camera1Enumerator.getSupportedFormats("
-                                        + param.args[0] + ") was empty, overriding with "
-                                        + fallback.size() + " UVC formats");
-                            } else {
-                                XposedBridge.log(TAG + ": Camera1Enumerator.getSupportedFormats("
-                                        + param.args[0] + ") empty, no CaptureFormat class found");
-                            }
-                        } else {
-                            XposedBridge.log(TAG + ": Camera1Enumerator.getSupportedFormats("
-                                    + param.args[0] + ") returned " + res.size() + " formats");
-                        }
+            Method getSupportedFormats = enumClass.getDeclaredMethod("getSupportedFormats", int.class);
+            getSupportedFormats.setAccessible(true);
+            xposed.hook(getSupportedFormats).intercept(chain -> {
+                @SuppressWarnings("unchecked")
+                List<?> res = (List<?>) chain.proceed();
+                if (res == null || res.isEmpty()) {
+                    List<Object> fallback = buildUvcCaptureFormats(classLoader);
+                    if (!fallback.isEmpty()) {
+                        xposed.log(Log.DEBUG, TAG, "Camera1Enumerator.getSupportedFormats("
+                                + chain.getArg(0) + ") was empty, overriding with "
+                                + fallback.size() + " UVC formats");
+                        return fallback;
+                    } else {
+                        xposed.log(Log.DEBUG, TAG, "Camera1Enumerator.getSupportedFormats("
+                                + chain.getArg(0) + ") empty, no CaptureFormat class found");
                     }
+                } else {
+                    xposed.log(Log.DEBUG, TAG, "Camera1Enumerator.getSupportedFormats("
+                            + chain.getArg(0) + ") returned " + res.size() + " formats");
                 }
-            );
-            XposedBridge.log(TAG + ": Camera1Enumerator.getSupportedFormats hook installed");
+                return res;
+            });
+            xposed.log(Log.DEBUG, TAG, "Camera1Enumerator.getSupportedFormats hook installed");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": failed to hook Camera1Enumerator.getSupportedFormats: "
+            xposed.log(Log.DEBUG, TAG, "failed to hook Camera1Enumerator.getSupportedFormats: "
                     + t.getMessage());
         }
     }
@@ -197,7 +183,7 @@ public class ByteRtcCameraHook {
         List<Object> formats = new ArrayList<>();
         for (String className : CAPTURE_FORMAT_CLASSES) {
             try {
-                Class<?> captureFormatClass = XposedHelpers.findClass(className, classLoader);
+                Class<?> captureFormatClass = Class.forName(className, false, classLoader);
                 for (int[] cfg : UVC_CONFIGS) {
                     Object fmt = tryCreateCaptureFormat(captureFormatClass, cfg);
                     if (fmt != null) {
@@ -205,8 +191,6 @@ public class ByteRtcCameraHook {
                     }
                 }
                 if (!formats.isEmpty()) {
-                    XposedBridge.log(TAG + ": built " + formats.size()
-                            + " UVC CaptureFormats using " + className);
                     break;
                 }
             } catch (Throwable ignored) {
@@ -225,14 +209,19 @@ public class ByteRtcCameraHook {
     private Object tryCreateCaptureFormat(Class<?> captureFormatClass, int[] cfg) {
         // Try: CaptureFormat(int width, int height, int minFramerate, int maxFramerate)
         try {
-            return XposedHelpers.newInstance(
-                    captureFormatClass, cfg[0], cfg[1], cfg[2] * 1000, cfg[2] * 1000);
+            Constructor<?> ctor = captureFormatClass.getDeclaredConstructor(
+                    int.class, int.class, int.class, int.class);
+            ctor.setAccessible(true);
+            return ctor.newInstance(cfg[0], cfg[1], cfg[2] * 1000, cfg[2] * 1000);
         } catch (Throwable ignored) {
             // Fall through to alternate constructor
         }
         // Try: CaptureFormat(int width, int height, int framerate)
         try {
-            return XposedHelpers.newInstance(captureFormatClass, cfg[0], cfg[1], cfg[2]);
+            Constructor<?> ctor = captureFormatClass.getDeclaredConstructor(
+                    int.class, int.class, int.class);
+            ctor.setAccessible(true);
+            return ctor.newInstance(cfg[0], cfg[1], cfg[2]);
         } catch (Throwable ignored) {
             // Constructor signature differs; skip this config
         }
@@ -242,19 +231,18 @@ public class ByteRtcCameraHook {
     /**
      * Hook Camera1Session to intercept create() and startCapturing().
      * Logs all invocations so issues on Android 14 TV can be diagnosed via logcat.
-     * This allows lower-level UVC hooks to substitute the real camera device.
      */
-    private void hookCamera1Session(ClassLoader classLoader, SharedPreferences prefs) {
+    private void hookCamera1Session(XposedInterface xposed, ClassLoader classLoader, SharedPreferences prefs) {
         String className = prefs.getString(
                 PrefManager.KEY_SESSION1_CLASS, PrefManager.DEFAULT_SESSION1_CLASS);
         Class<?> sessionClass;
         try {
-            sessionClass = XposedHelpers.findClass(className, classLoader);
-        } catch (XposedHelpers.ClassNotFoundError e) {
+            sessionClass = Class.forName(className, false, classLoader);
+        } catch (ClassNotFoundException e) {
             // Expected when this app does not include the ByteRTC SDK; fail silently.
             return;
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": failed to find Camera1Session class: " + t.getMessage());
+            xposed.log(Log.DEBUG, TAG, "failed to find Camera1Session class: " + t.getMessage());
             return;
         }
 
@@ -262,78 +250,71 @@ public class ByteRtcCameraHook {
         // getDeclaredMethods() is used intentionally: the exact parameter signatures of
         // create() and startCapturing() vary across ByteRTC SDK versions, so we hook
         // all overloads by name rather than a single fixed signature.
-        for (java.lang.reflect.Method m : sessionClass.getDeclaredMethods()) {
+        for (Method m : sessionClass.getDeclaredMethods()) {
             final String methodName = m.getName();
             if ("create".equals(methodName) || "startCapturing".equals(methodName)) {
-                XposedBridge.hookMethod(m, new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                        XposedBridge.log(TAG + ": Camera1Session." + methodName + "() called"
-                                + (param.args.length > 0
-                                        ? " args=" + Arrays.toString(param.args) : ""));
-                    }
-
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        if (param.getThrowable() != null) {
-                            XposedBridge.log(TAG + ": Camera1Session." + methodName
-                                    + "() threw: " + param.getThrowable().getMessage());
-                        } else {
-                            XposedBridge.log(TAG + ": Camera1Session." + methodName
-                                    + "() returned: " + param.getResult());
-                        }
+                m.setAccessible(true);
+                xposed.hook(m).intercept(chain -> {
+                    xposed.log(Log.DEBUG, TAG, "Camera1Session." + methodName + "() called"
+                            + (chain.getArgs().size() > 0
+                                    ? " args=" + chain.getArgs() : ""));
+                    try {
+                        Object result = chain.proceed();
+                        xposed.log(Log.DEBUG, TAG, "Camera1Session." + methodName
+                                + "() returned: " + result);
+                        return result;
+                    } catch (Throwable t) {
+                        xposed.log(Log.DEBUG, TAG, "Camera1Session." + methodName
+                                + "() threw: " + t.getMessage());
+                        throw t;
                     }
                 });
                 hookedCount++;
             }
         }
-        XposedBridge.log(TAG + ": Camera1Session: " + hookedCount + " method(s) hooked");
+        xposed.log(Log.DEBUG, TAG, "Camera1Session: " + hookedCount + " method(s) hooked");
     }
 
     /**
      * Hook Camera2Session to intercept create().
      * Logs session creation so failures on Android 14 TV can be diagnosed.
      */
-    private void hookCamera2Session(ClassLoader classLoader, SharedPreferences prefs) {
+    private void hookCamera2Session(XposedInterface xposed, ClassLoader classLoader, SharedPreferences prefs) {
         String className = prefs.getString(
                 PrefManager.KEY_SESSION2_CLASS, PrefManager.DEFAULT_SESSION2_CLASS);
         Class<?> sessionClass;
         try {
-            sessionClass = XposedHelpers.findClass(className, classLoader);
-        } catch (XposedHelpers.ClassNotFoundError e) {
+            sessionClass = Class.forName(className, false, classLoader);
+        } catch (ClassNotFoundException e) {
             // Expected when this app does not include the ByteRTC SDK; fail silently.
             return;
         } catch (Throwable t) {
-            XposedBridge.log(TAG + ": failed to find Camera2Session class: " + t.getMessage());
+            xposed.log(Log.DEBUG, TAG, "failed to find Camera2Session class: " + t.getMessage());
             return;
         }
 
         int hookedCount = 0;
         // getDeclaredMethods() is used intentionally: create() overloads vary by SDK version.
-        for (java.lang.reflect.Method m : sessionClass.getDeclaredMethods()) {
+        for (Method m : sessionClass.getDeclaredMethods()) {
             if ("create".equals(m.getName())) {
-                XposedBridge.hookMethod(m, new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                        XposedBridge.log(TAG + ": Camera2Session.create() called"
-                                + (param.args.length > 0
-                                        ? " args=" + Arrays.toString(param.args) : ""));
-                    }
-
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        if (param.getThrowable() != null) {
-                            XposedBridge.log(TAG + ": Camera2Session.create() threw: "
-                                    + param.getThrowable().getMessage());
-                        } else {
-                            XposedBridge.log(TAG + ": Camera2Session.create() returned: "
-                                    + param.getResult());
-                        }
+                m.setAccessible(true);
+                xposed.hook(m).intercept(chain -> {
+                    xposed.log(Log.DEBUG, TAG, "Camera2Session.create() called"
+                            + (chain.getArgs().size() > 0
+                                    ? " args=" + chain.getArgs() : ""));
+                    try {
+                        Object result = chain.proceed();
+                        xposed.log(Log.DEBUG, TAG, "Camera2Session.create() returned: " + result);
+                        return result;
+                    } catch (Throwable t) {
+                        xposed.log(Log.DEBUG, TAG, "Camera2Session.create() threw: "
+                                + t.getMessage());
+                        throw t;
                     }
                 });
                 hookedCount++;
             }
         }
-        XposedBridge.log(TAG + ": Camera2Session: " + hookedCount + " method(s) hooked");
+        xposed.log(Log.DEBUG, TAG, "Camera2Session: " + hookedCount + " method(s) hooked");
     }
 }

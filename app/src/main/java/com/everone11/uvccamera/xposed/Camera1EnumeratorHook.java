@@ -1,11 +1,12 @@
 package com.everone11.uvccamera.xposed;
 
 import android.content.SharedPreferences;
+import android.util.Log;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
+import io.github.libxposed.api.XposedInterface;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.List;
 
 /**
@@ -14,14 +15,17 @@ import java.util.List;
  */
 public class Camera1EnumeratorHook {
 
+    private static final String TAG = "Camera1EnumeratorHook";
+
     /**
      * 在目标包加载时安装 Hook。
      *
+     * @param xposed       libxposed API 102 接口实例（由 MainModule 传入）
      * @param packageName  目标应用包名
      * @param classLoader  目标应用的 ClassLoader
-     * @param prefs        模块 SharedPreferences（由 MainModule 通过 getSharedPreferences() 提供）
+     * @param prefs        模块 SharedPreferences（由 MainModule 通过 getRemotePreferences() 提供）
      */
-    public void apply(String packageName, ClassLoader classLoader, SharedPreferences prefs) {
+    public void apply(XposedInterface xposed, String packageName, ClassLoader classLoader, SharedPreferences prefs) {
         String targetPkg = prefs.getString(PrefManager.KEY_TARGET_PACKAGE, "");
 
         if (targetPkg != null && !targetPkg.isEmpty()) {
@@ -34,44 +38,43 @@ public class Camera1EnumeratorHook {
         String enumeratorClass = prefs.getString(
                 PrefManager.KEY_ENUMERATOR_CLASS, PrefManager.DEFAULT_ENUMERATOR_CLASS);
 
-        XposedBridge.log("Camera1EnumeratorHook loaded in: " + packageName);
+        xposed.log(Log.DEBUG, TAG, "loaded in: " + packageName);
+
+        Class<?> enumClass;
         try {
-            final Class<?> enumClass = XposedHelpers.findClass(
-                enumeratorClass,
-                classLoader
-            );
-
-            XposedHelpers.findAndHookMethod(
-                enumClass,
-                "getSupportedFormats",
-                int.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                        int camIndex = (Integer) param.args[0];
-                        XposedBridge.log("Camera1Enumerator.getSupportedFormats called for index: " + camIndex);
-                        try {
-                            // 清空静态缓存，强制重新枚举
-                            XposedHelpers.setStaticObjectField(enumClass, "cachedSupportedFormats", null);
-                            XposedBridge.log("cleared cachedSupportedFormats");
-                        } catch (Throwable t) {
-                            XposedBridge.log("failed to clear cachedSupportedFormats: " + t);
-                        }
-                    }
-
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        @SuppressWarnings("unchecked")
-                        List<?> res = (List<?>) param.getResult();
-                        XposedBridge.log("Camera1Enumerator.getSupportedFormats returned size: "
-                                + (res == null ? "null" : res.size()));
-                    }
-                }
-            );
-        } catch (XposedHelpers.ClassNotFoundError e) {
+            enumClass = Class.forName(enumeratorClass, false, classLoader);
+        } catch (ClassNotFoundException e) {
             // Expected when this app does not include the ByteRTC SDK; fail silently.
+            return;
         } catch (Throwable t) {
-            XposedBridge.log("Camera1EnumeratorHook error: " + t);
+            xposed.log(Log.DEBUG, TAG, "Camera1EnumeratorHook error finding class: " + t);
+            return;
+        }
+
+        final Class<?> finalEnumClass = enumClass;
+        try {
+            Method getSupportedFormats = enumClass.getDeclaredMethod("getSupportedFormats", int.class);
+            getSupportedFormats.setAccessible(true);
+            xposed.hook(getSupportedFormats).intercept(chain -> {
+                int camIndex = (Integer) chain.getArg(0);
+                xposed.log(Log.DEBUG, TAG, "Camera1Enumerator.getSupportedFormats called for index: " + camIndex);
+                try {
+                    // 清空静态缓存，强制重新枚举
+                    Field field = finalEnumClass.getDeclaredField("cachedSupportedFormats");
+                    field.setAccessible(true);
+                    field.set(null, null);
+                    xposed.log(Log.DEBUG, TAG, "cleared cachedSupportedFormats");
+                } catch (Throwable t) {
+                    xposed.log(Log.DEBUG, TAG, "failed to clear cachedSupportedFormats: " + t);
+                }
+
+                List<?> res = (List<?>) chain.proceed();
+                xposed.log(Log.DEBUG, TAG, "Camera1Enumerator.getSupportedFormats returned size: "
+                        + (res == null ? "null" : res.size()));
+                return res;
+            });
+        } catch (Throwable t) {
+            xposed.log(Log.DEBUG, TAG, "Camera1EnumeratorHook error: " + t);
         }
     }
 }
